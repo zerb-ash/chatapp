@@ -393,24 +393,37 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut my_username = String::new();
 
     // 1. Initial Handshake & Username Uniqueness Validation
+   // 1. Initial Handshake & Username Uniqueness Validation
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
         if let Ok(ClientEvent::Join { username }) = serde_json::from_str(&text) {
             let username_trimmed = username.trim().to_string();
-            let mut users = state.users.lock().unwrap();
+            
+            // Scope the Mutex lock so it gets dropped BEFORE any .await calls
+            let is_taken = {
+                let users = state.users.lock().unwrap();
+                users.values().any(|u| u.eq_ignore_ascii_case(&username_trimmed))
+            };
 
             // Check if username is already taken by another connected user
-            if users.values().any(|u| u.eq_ignore_ascii_case(&username_trimmed)) {
+            if is_taken {
                 let err_evt = ServerEvent::JoinError { error: "Username is already taken! Please choose another.".into() };
                 let _ = sender.send(Message::Text(serde_json::to_string(&err_evt).unwrap())).await;
                 return;
             } else {
-                users.insert(my_id, username_trimmed.clone());
+                // Lock again quickly just to insert
+                {
+                    let mut users = state.users.lock().unwrap();
+                    users.insert(my_id, username_trimmed.clone());
+                }
+                
                 my_username = username_trimmed;
 
                 let success_evt = ServerEvent::JoinSuccess { username: my_username.clone() };
                 let _ = sender.send(Message::Text(serde_json::to_string(&success_evt).unwrap())).await;
                 
-                broadcast_user_list(&state, &users);
+                // Broadcast list after lock release
+                let users_snapshot = state.users.lock().unwrap().clone();
+                broadcast_user_list(&state, &users_snapshot);
                 break;
             }
         }
