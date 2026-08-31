@@ -1397,7 +1397,7 @@
 
     function openMemberMenu(e, username) {
         const g = getActiveGroup();
-        if (activeGroupId === "hub" || g.owner !== myUsername || username === myUsername) return;
+        if (!g || activeGroupId === "hub" || g.owner !== myUsername || username === myUsername) return;
         e.stopPropagation();
         modTargetUser = username;
         document.getElementById("mod-menu-title").textContent = username;
@@ -1435,7 +1435,17 @@
         }
     }
 
-    document.addEventListener("click", () => hideModMenu());
+    document.addEventListener("click", (e) => {
+        const menu = document.getElementById("mod-menu");
+        if (menu.contains(e.target) || e.target.closest(".member-item.mod-target")) return;
+        hideModMenu();
+    });
+
+    document.getElementById("channel-member-items").addEventListener("click", (e) => {
+        const item = e.target.closest(".member-item.mod-target");
+        if (!item || !item.dataset.username) return;
+        openMemberMenu(e, item.dataset.username);
+    });
 
     function handleGroupDeleted(groupId) {
         delete groups[groupId];
@@ -1861,10 +1871,10 @@
         const g = getActiveGroup();
         const isOwner = g && g.owner === u;
         const crown = isOwner ? '<span class="member-crown" title="Room owner">👑</span>' : "";
-        const canMod = activeGroupId !== "hub" && g.owner === myUsername && u !== myUsername;
+        const canMod = activeGroupId !== "hub" && g && g.owner === myUsername && u !== myUsername;
         const modClass = canMod ? " mod-target" : "";
-        const click = canMod ? ` onclick="openMemberMenu(event, ${JSON.stringify(u)})"` : "";
-        return `<div class="member-item${modClass}"${click}><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span>${crown}</div>`;
+        const userAttr = canMod ? ` data-username="${escapeHtml(u)}"` : "";
+        return `<div class="member-item${modClass}"${userAttr}><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span>${crown}</div>`;
     }
 
     function updateChannelMembers(data) {

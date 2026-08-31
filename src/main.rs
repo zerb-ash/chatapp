@@ -574,8 +574,12 @@ fn remove_member_from_group(state: &AppState, actor: &str, group_id: &str, targe
         .or_default()
         .remove(target);
 
+    let viewer_channel = user_viewing_channel(state, target, group_id);
     kick_member_from_group(state, actor, group_id, target);
     broadcast(state, &ServerEvent::GroupUpdated { group: updated });
+    if let Some(ch) = viewer_channel {
+        broadcast_channel_viewers(state, group_id, &ch);
+    }
 }
 
 fn set_mod_mute(state: &AppState, actor: &str, group_id: &str, target: &str, enabled: bool) {
@@ -1136,6 +1140,7 @@ fn admin_kick_from_room(state: &AppState, group_id: &str, target: &str) {
         g.close_votes.remove(target);
         g.name.clone()
     };
+    let viewer_channel = user_viewing_channel(state, target, group_id);
     disconnect_from_group_vc(state, target, group_id);
     if let Some(&cid) = state.user_conns.lock().unwrap().get(target) {
         if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&cid) {
@@ -1170,6 +1175,9 @@ fn admin_kick_from_room(state: &AppState, group_id: &str, target: &str) {
                 group: group_info(group_id, g),
             },
         );
+    }
+    if let Some(ch) = viewer_channel {
+        broadcast_channel_viewers(state, group_id, &ch);
     }
 }
 
@@ -1772,6 +1780,18 @@ fn hub_group_info(state: &AppState) -> GroupInfo {
         }],
         members: state.users.lock().unwrap().values().cloned().collect(),
         close_votes: vec![],
+    }
+}
+
+fn user_viewing_channel(state: &AppState, username: &str, group_id: &str) -> Option<String> {
+    let user_conns = state.user_conns.lock().unwrap();
+    let conn_id = *user_conns.get(username)?;
+    let conns = state.conn_states.lock().unwrap();
+    let cs = conns.get(&conn_id)?;
+    if cs.group_id == group_id {
+        Some(cs.channel_id.clone())
+    } else {
+        None
     }
 }
 
