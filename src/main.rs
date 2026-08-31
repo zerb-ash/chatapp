@@ -25,7 +25,7 @@ enum ServerEvent {
     JoinSuccess { username: String },
     JoinError { error: String },
     History { messages: Vec<EncryptedMessage> },
-    Message(EncryptedMessage),
+    Message { username: String, ciphertext: String, iv: String, timestamp: u64 },
     UserList { users: Vec<String> },
     Typing { username: String, is_typing: bool },
 }
@@ -165,7 +165,6 @@ async fn index() -> Html<&'static str> {
             let activeTypers = new Set();
             let typingTimeout = null;
 
-            // Auto-fill from localStorage on page load
             window.addEventListener('DOMContentLoaded', () => {
                 const savedUser = localStorage.getItem('rc_username');
                 const savedKey = localStorage.getItem('rc_key');
@@ -188,7 +187,6 @@ async fn index() -> Html<&'static str> {
                     return;
                 }
 
-                // Derive AES-GCM Key from passphrase
                 const enc = new TextEncoder();
                 const keyMaterial = await crypto.subtle.importKey(
                     "raw", enc.encode(passVal), "PBKDF2", false, ["deriveKey"]
@@ -200,7 +198,6 @@ async fn index() -> Html<&'static str> {
 
                 myUsername = userVal;
 
-                // Establish WebSocket Connection
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
@@ -212,7 +209,6 @@ async fn index() -> Html<&'static str> {
                     const event = JSON.parse(e.data);
 
                     if (event.type === 'JoinSuccess') {
-                        // Store credentials in localStorage
                         localStorage.setItem('rc_username', myUsername);
                         localStorage.setItem('rc_key', passVal);
 
@@ -235,7 +231,7 @@ async fn index() -> Html<&'static str> {
                         }
                     } 
                     else if (event.type === 'Message') {
-                        await renderMessage(event.data);
+                        await renderMessage(event);
                     } 
                     else if (event.type === 'Typing') {
                         handleTypingEvent(event.username, event.is_typing);
@@ -292,7 +288,7 @@ async fn index() -> Html<&'static str> {
             async function renderMessage(msg) {
                 const box = document.getElementById('messages');
                 const plaintext = await decryptText(msg.ciphertext, msg.iv);
-                const initial = msg.username.charAt(0).toUpperCase();
+                const initial = msg.username ? msg.username.charAt(0).toUpperCase() : '?';
 
                 let parsedBody = DOMPurify.sanitize(marked.parse(plaintext));
                 parsedBody = parsedBody.replace(
@@ -311,7 +307,7 @@ async fn index() -> Html<&'static str> {
                         <div class="avatar">${initial}</div>
                         <div class="msg-content">
                             <div class="msg-header">
-                                <span class="username">${escapeHtml(msg.username)}</span>
+                                <span class="username">${escapeHtml(msg.username || 'Anonymous')}</span>
                                 <span class="timestamp">${timeStr}</span>
                             </div>
                             <div class="body">${parsedBody}</div>
@@ -331,7 +327,6 @@ async fn index() -> Html<&'static str> {
                 });
             }
 
-            // Typing Indicator Logic
             function handleTypingEvent(user, isTyping) {
                 if (user === myUsername) return;
                 if (isTyping) activeTypers.add(user);
@@ -393,24 +388,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut my_username = String::new();
 
     // 1. Initial Handshake & Username Uniqueness Validation
-   // 1. Initial Handshake & Username Uniqueness Validation
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
         if let Ok(ClientEvent::Join { username }) = serde_json::from_str(&text) {
             let username_trimmed = username.trim().to_string();
             
-            // Scope the Mutex lock so it gets dropped BEFORE any .await calls
             let is_taken = {
                 let users = state.users.lock().unwrap();
                 users.values().any(|u| u.eq_ignore_ascii_case(&username_trimmed))
             };
 
-            // Check if username is already taken by another connected user
             if is_taken {
                 let err_evt = ServerEvent::JoinError { error: "Username is already taken! Please choose another.".into() };
                 let _ = sender.send(Message::Text(serde_json::to_string(&err_evt).unwrap())).await;
                 return;
             } else {
-                // Lock again quickly just to insert
                 {
                     let mut users = state.users.lock().unwrap();
                     users.insert(my_id, username_trimmed.clone());
@@ -421,7 +412,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 let success_evt = ServerEvent::JoinSuccess { username: my_username.clone() };
                 let _ = sender.send(Message::Text(serde_json::to_string(&success_evt).unwrap())).await;
                 
-                // Broadcast list after lock release
                 let users_snapshot = state.users.lock().unwrap().clone();
                 broadcast_user_list(&state, &users_snapshot);
                 break;
@@ -459,24 +449,28 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
                         let msg = EncryptedMessage {
                             username: username_clone.clone(),
-                            ciphertext,
-                            iv,
+                            ciphertext: ciphertext.clone(),
+                            iv: iv.clone(),
                             timestamp,
                         };
 
                         {
                             let mut msgs = state_clone.messages.lock().unwrap();
-                            msgs.push_back(msg.clone());
+                            msgs.push_back(msg);
                         }
 
-                        let evt = ServerEvent::Message(msg);
+                        let evt = ServerEvent::Message {
+                            username: username_clone.clone(),
+                            ciphertext,
+                            iv,
+                            timestamp,
+                        };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
                     ClientEvent::Typing { is_typing } => {
                         let evt = ServerEvent::Typing { username: username_clone.clone(), is_typing };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
-                    _ => {}
                 }
             }
         }
@@ -491,7 +485,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     {
         let mut users = state.users.lock().unwrap();
         users.remove(&my_id);
-        broadcast_user_list(&state, &users);
+        let users_snapshot = users.clone();
+        broadcast_user_list(&state, &users_snapshot);
     }
 }
 
