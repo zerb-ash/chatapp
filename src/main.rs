@@ -29,8 +29,9 @@ enum ServerEvent {
     UserList { users: Vec<String> },
     Typing { username: String, is_typing: bool },
     VoiceSignal { from: String, target: String, signal: serde_json::Value },
-    VoiceInvite { from: String, room_id: String },
+    VoiceInvite { from: String, target: String, room_id: String },
     VoiceStateUpdate { username: String, room_id: Option<String> },
+    DeleteVoiceRoom { room_id: String },
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,7 @@ enum ClientEvent {
     VoiceSignal { target: String, signal: serde_json::Value },
     VoiceInvite { target: String, room_id: String },
     VoiceStateUpdate { room_id: Option<String> },
+    DeleteVoiceRoom { room_id: String },
 }
 
 struct AppState {
@@ -103,12 +105,15 @@ async fn index() -> Html<&'static str> {
             #sidebar { width: 260px; background: #2b2d31; display: flex; flex-direction: column; border-right: 1px solid #1f2023; }
             .sidebar-header { padding: 16px; font-weight: bold; color: #f2f5f7; border-bottom: 1px solid #1f2023; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
             
-            .vc-section { padding: 12px 8px; border-bottom: 1px solid #1f2023; }
+            .vc-section { padding: 12px 8px; border-bottom: 1px solid #1f2023; overflow-y: auto; max-height: 40vh; }
             .vc-title { font-size: 11px; font-weight: bold; color: #949ba4; text-transform: uppercase; margin-bottom: 8px; padding-left: 8px; }
-            .vc-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 4px; color: #949ba4; cursor: pointer; font-size: 14px; }
+            .vc-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 4px; color: #949ba4; cursor: pointer; font-size: 14px; margin-bottom: 2px; }
             .vc-item:hover { background: #35373c; color: #dbdee1; }
             .vc-item.active { background: #404249; color: #fff; }
             
+            .vc-delete-btn { opacity: 0.6; cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+            .vc-delete-btn:hover { opacity: 1; background: #da373c; }
+
             .vc-roster { list-style: none; padding-left: 20px; margin-top: 4px; margin-bottom: 8px; }
             .vc-user { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 13px; color: #949ba4; border-radius: 4px; }
             .vc-user-avatar { width: 24px; height: 24px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; border: 2px solid transparent; transition: border-color 0.15s ease; }
@@ -191,10 +196,10 @@ async fn index() -> Html<&'static str> {
         <div id="modal">
             <div class="modal-box">
                 <h3>Welcome to RustCord</h3>
-                <p>Enter a unique username and key to enter.</p>
+                <p>Enter a username and passphrase (leave passphrase blank for global key).</p>
                 <div id="error-msg"></div>
                 <input id="username-input" type="text" placeholder="Username" autofocus />
-                <input id="room-key" type="password" placeholder="Passphrase (Secret Key)" />
+                <input id="room-key" type="password" placeholder="Passphrase (Optional)" />
                 <button onclick="attemptJoin()">Join Server</button>
             </div>
         </div>
@@ -218,10 +223,7 @@ async fn index() -> Html<&'static str> {
                 </div>
                 <ul id="roster-general" class="vc-roster"></ul>
 
-                <div id="vc-private" class="vc-item" style="display:none;" onclick="toggleVoiceChannel(currentRoom)">
-                    <span>🔒 Private Call</span>
-                </div>
-                <ul id="roster-private" class="vc-roster" style="display:none;"></ul>
+                <div id="private-rooms-list"></div>
             </div>
 
             <div class="sidebar-header" style="border-top: 1px solid #1f2023;">Online Users — <span id="user-count">0</span></div>
@@ -230,7 +232,7 @@ async fn index() -> Html<&'static str> {
             <div class="vc-controls">
                 <button id="btn-mute" class="vc-btn" onclick="toggleMute()">🎙️ Mute</button>
                 <button id="btn-deaf" class="vc-btn" onclick="toggleDeafen()">🎧 Deafen</button>
-                <button id="btn-screen" class="vc-btn" onclick="toggleScreenShare()" disabled title="Screen sharing only allowed in private VCs">🖥️ Share</button>
+                <button id="btn-screen" class="vc-btn" onclick="toggleScreenShare()" disabled title="Screen sharing enabled inside voice rooms">🖥️ Share</button>
             </div>
         </div>
 
@@ -260,7 +262,9 @@ async fn index() -> Html<&'static str> {
         <script>
             let ws;
             let myUsername = "";
-            let cryptoKey = null;
+            let customCryptoKey = null;
+            let globalCryptoKey = null;
+
             let activeTypers = new Set();
             let typingTimeout = null;
             let pastedImageDataUrl = null;
@@ -273,6 +277,7 @@ async fn index() -> Html<&'static str> {
             let localScreenStream = null;
             let peerConnections = {};
             let roomMembers = {};
+            let knownPrivateRooms = new Set(); // Stores joined/invited private rooms
             let audioAnalyzers = {};
             let audioInterval = null;
             let pendingInviteRoom = null;
@@ -298,7 +303,7 @@ async fn index() -> Html<&'static str> {
                     pendingInviteRoom = hash.replace('#room=', '');
                 }
 
-                if (savedUser && savedKey) {
+                if (savedUser) {
                     attemptJoin();
                 }
 
@@ -343,25 +348,37 @@ async fn index() -> Html<&'static str> {
                 boxWrapper.classList.remove('has-preview');
             }
 
+            async function deriveKey(passphrase) {
+                const enc = new TextEncoder();
+                const keyMaterial = await crypto.subtle.importKey(
+                    "raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]
+                );
+                return await crypto.subtle.deriveKey(
+                    { name: "PBKDF2", salt: enc.encode("rust_salt_2026"), iterations: 100000, hash: "SHA-256" },
+                    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+                );
+            }
+
             async function attemptJoin() {
                 const userVal = document.getElementById('username-input').value.trim();
                 const passVal = document.getElementById('room-key').value.trim();
                 const errorDiv = document.getElementById('error-msg');
                 errorDiv.style.display = 'none';
 
-                if (!userVal || !passVal) {
-                    showError("Username and Passphrase are required!");
+                if (!userVal) {
+                    showError("Username is required!");
                     return;
                 }
 
-                const enc = new TextEncoder();
-                const keyMaterial = await crypto.subtle.importKey(
-                    "raw", enc.encode(passVal), "PBKDF2", false, ["deriveKey"]
-                );
-                cryptoKey = await crypto.subtle.deriveKey(
-                    { name: "PBKDF2", salt: enc.encode("rust_salt_2026"), iterations: 100000, hash: "SHA-256" },
-                    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
-                );
+                // Initialize Global Key Fallback
+                globalCryptoKey = await deriveKey("rust-chat-global-default-key");
+
+                // If user provided a custom key, derive key for it
+                if (passVal) {
+                    customCryptoKey = await deriveKey(passVal);
+                } else {
+                    customCryptoKey = globalCryptoKey;
+                }
 
                 myUsername = userVal;
 
@@ -385,6 +402,7 @@ async fn index() -> Html<&'static str> {
                         msgInput.focus();
 
                         if (pendingInviteRoom) {
+                            addPrivateRoom(pendingInviteRoom);
                             joinVoiceRoom(pendingInviteRoom);
                         }
                     } 
@@ -413,10 +431,17 @@ async fn index() -> Html<&'static str> {
                         handleVoiceSignal(event.from, event.signal);
                     }
                     else if (event.type === 'VoiceInvite') {
-                        showInviteToast(event.from, event.room_id);
+                        // FIX: Only toast if the target is actually me (not self-invited)
+                        if (event.target === myUsername) {
+                            addPrivateRoom(event.room_id);
+                            showInviteToast(event.from, event.room_id);
+                        }
                     }
                     else if (event.type === 'VoiceStateUpdate') {
                         handleVoiceStateUpdate(event.username, event.room_id);
+                    }
+                    else if (event.type === 'DeleteVoiceRoom') {
+                        handleDeleteVoiceRoom(event.room_id);
                     }
                 };
             }
@@ -431,7 +456,7 @@ async fn index() -> Html<&'static str> {
                 const enc = new TextEncoder();
                 const iv = crypto.getRandomValues(new Uint8Array(12));
                 const ciphertext = await crypto.subtle.encrypt(
-                    { name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(text)
+                    { name: "AES-GCM", iv: iv }, customCryptoKey, enc.encode(text)
                 );
                 return {
                     ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
@@ -440,16 +465,26 @@ async fn index() -> Html<&'static str> {
             }
 
             async function decryptText(ciphertextB64, ivB64) {
+                const ciphertext = Uint8Array.from(atob(ciphertextB64), c => c.charCodeAt(0));
+                const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+
+                // 1. Attempt decryption with Custom Key
                 try {
-                    const ciphertext = Uint8Array.from(atob(ciphertextB64), c => c.charCodeAt(0));
-                    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
                     const decrypted = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: iv }, cryptoKey, ciphertext
+                        { name: "AES-GCM", iv: iv }, customCryptoKey, ciphertext
                     );
                     return new TextDecoder().decode(decrypted);
-                } catch (e) {
-                    return "⚠️ [Decryption Failed - Invalid Passphrase]";
-                }
+                } catch (e) {}
+
+                // 2. Fallback to Global Key
+                try {
+                    const decrypted = await crypto.subtle.decrypt(
+                        { name: "AES-GCM", iv: iv }, globalCryptoKey, ciphertext
+                    );
+                    return new TextDecoder().decode(decrypted);
+                } catch (e) {}
+
+                return "⚠️ [Decryption Failed - Invalid Passphrase]";
             }
 
             async function send() {
@@ -539,6 +574,40 @@ async fn index() -> Html<&'static str> {
                 });
             }
 
+            function addPrivateRoom(roomId) {
+                if (knownPrivateRooms.has(roomId)) return;
+                knownPrivateRooms.add(roomId);
+
+                const container = document.getElementById('private-rooms-list');
+                const shortName = roomId.length > 12 ? roomId.substring(0, 10) + '...' : roomId;
+
+                const wrapper = document.createElement('div');
+                wrapper.id = `vc-wrapper-${roomId}`;
+                wrapper.innerHTML = `
+                    <div id="vc-item-${roomId}" class="vc-item" onclick="toggleVoiceChannel('${roomId}')">
+                        <span>🔒 Private: ${shortName}</span>
+                        <span class="vc-delete-btn" title="Delete VC" onclick="event.stopPropagation(); deletePrivateVC('${roomId}')">🗑️</span>
+                    </div>
+                    <ul id="roster-${roomId}" class="vc-roster"></ul>
+                `;
+                container.appendChild(wrapper);
+            }
+
+            function deletePrivateVC(roomId) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "DeleteVoiceRoom", room_id: roomId }));
+                }
+            }
+
+            function handleDeleteVoiceRoom(roomId) {
+                if (currentRoom === roomId) {
+                    leaveVoiceChannel();
+                }
+                knownPrivateRooms.delete(roomId);
+                const elem = document.getElementById(`vc-wrapper-${roomId}`);
+                if (elem) elem.remove();
+            }
+
             async function toggleVoiceChannel(roomName) {
                 if (currentRoom === roomName) {
                     leaveVoiceChannel();
@@ -550,20 +619,15 @@ async fn index() -> Html<&'static str> {
 
             async function joinVoiceRoom(roomName) {
                 currentRoom = roomName;
-                document.getElementById('vc-general').classList.toggle('active', roomName === 'general');
-                
-                const privItem = document.getElementById('vc-private');
-                const privRoster = document.getElementById('roster-private');
-                const screenBtn = document.getElementById('btn-screen');
 
-                if (roomName !== 'general') {
-                    privItem.style.display = 'flex';
-                    privItem.classList.add('active');
-                    privRoster.style.display = 'block';
-                    screenBtn.disabled = false;
-                } else {
-                    screenBtn.disabled = true;
-                }
+                // Update UI active state
+                document.getElementById('vc-general').classList.toggle('active', roomName === 'general');
+                knownPrivateRooms.forEach(id => {
+                    const item = document.getElementById(`vc-item-${id}`);
+                    if (item) item.classList.toggle('active', id === roomName);
+                });
+
+                document.getElementById('btn-screen').disabled = false;
 
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({
@@ -580,6 +644,7 @@ async fn index() -> Html<&'static str> {
                     ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: currentRoom }));
                 }
 
+                // Connect to peers already in this room
                 Object.keys(roomMembers).forEach(targetUser => {
                     if (targetUser !== myUsername && roomMembers[targetUser] === currentRoom) {
                         createPeerConnection(targetUser, true);
@@ -598,10 +663,10 @@ async fn index() -> Html<&'static str> {
 
                 currentRoom = null;
                 document.getElementById('vc-general').classList.remove('active');
-                const privItem = document.getElementById('vc-private');
-                privItem.classList.remove('active');
-                privItem.style.display = 'none';
-                document.getElementById('roster-private').style.display = 'none';
+                knownPrivateRooms.forEach(id => {
+                    const item = document.getElementById(`vc-item-${id}`);
+                    if (item) item.classList.remove('active');
+                });
 
                 const screenBtn = document.getElementById('btn-screen');
                 screenBtn.disabled = true;
@@ -623,21 +688,37 @@ async fn index() -> Html<&'static str> {
                 });
 
                 document.getElementById('remote-audio-container').innerHTML = '';
+                document.getElementById('video-grid').innerHTML = '';
+                document.getElementById('video-grid').style.display = 'none';
+
                 stopSpeakingMonitor();
                 renderVCRosters();
             }
 
             function handleVoiceStateUpdate(username, roomId) {
-                if (roomId) roomMembers[username] = roomId;
-                else delete roomMembers[username];
+                if (roomId) {
+                    roomMembers[username] = roomId;
+                    if (roomId !== 'general') addPrivateRoom(roomId);
+                } else {
+                    delete roomMembers[username];
+                }
+
+                // Auto connection if someone joins my room while I'm inside
+                if (currentRoom && roomId === currentRoom && username !== myUsername) {
+                    createPeerConnection(username, true);
+                }
+
                 renderVCRosters();
             }
 
             function renderVCRosters() {
                 const genRoster = document.getElementById('roster-general');
-                const privRoster = document.getElementById('roster-private');
                 genRoster.innerHTML = '';
-                privRoster.innerHTML = '';
+
+                knownPrivateRooms.forEach(rId => {
+                    const roster = document.getElementById(`roster-${rId}`);
+                    if (roster) roster.innerHTML = '';
+                });
 
                 Object.keys(roomMembers).forEach(user => {
                     const room = roomMembers[user];
@@ -652,8 +733,9 @@ async fn index() -> Html<&'static str> {
 
                     if (room === 'general') {
                         genRoster.appendChild(li);
-                    } else if (currentRoom && room === currentRoom) {
-                        privRoster.appendChild(li);
+                    } else {
+                        const targetRoster = document.getElementById(`roster-${room}`);
+                        if (targetRoster) targetRoster.appendChild(li);
                     }
                 });
             }
@@ -741,15 +823,13 @@ async fn index() -> Html<&'static str> {
                     }
                 };
 
-                if (isInitiator) {
-                    pc.onnegotiationneeded = async () => {
-                        try {
-                            const offer = await pc.createOffer();
-                            await pc.setLocalDescription(offer);
-                            sendVoiceSignal(targetUser, { sdp: pc.localDescription });
-                        } catch (err) { console.error(err); }
-                    };
-                }
+                pc.onnegotiationneeded = async () => {
+                    try {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        sendVoiceSignal(targetUser, { sdp: pc.localDescription });
+                    } catch (err) { console.error(err); }
+                };
 
                 return pc;
             }
@@ -795,8 +875,8 @@ async fn index() -> Html<&'static str> {
             }
 
             async function toggleScreenShare() {
-                if (!currentRoom || currentRoom === 'general') {
-                    alert("Screen sharing is strictly enabled ONLY inside private voice rooms.");
+                if (!currentRoom) {
+                    alert("Please join a voice room first!");
                     return;
                 }
 
@@ -804,7 +884,11 @@ async fn index() -> Html<&'static str> {
                     localScreenStream.getTracks().forEach(t => t.stop());
                     localScreenStream = null;
                     document.getElementById('btn-screen').classList.remove('active');
-                    document.getElementById('video-grid').style.display = 'none';
+                    const localVid = document.getElementById('video-local');
+                    if (localVid) localVid.remove();
+                    if (document.querySelectorAll('#video-grid video').length === 0) {
+                        document.getElementById('video-grid').style.display = 'none';
+                    }
                     return;
                 }
 
@@ -824,6 +908,7 @@ async fn index() -> Html<&'static str> {
                     }
                     localVid.srcObject = localScreenStream;
 
+                    // Add track to all existing peer connections
                     Object.values(peerConnections).forEach(pc => {
                         localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                     });
@@ -834,11 +919,8 @@ async fn index() -> Html<&'static str> {
             }
 
             function inviteUser(targetUser) {
-                const roomToken = "vc-priv-" + Math.random().toString(36).substring(2, 9);
-                const inviteUrl = `${window.location.origin}${window.location.pathname}#room=${roomToken}`;
-                
-                navigator.clipboard.writeText(inviteUrl);
-                alert(`Invite link copied to clipboard!\nSending notification to ${targetUser}...`);
+                const roomToken = "priv-" + Math.random().toString(36).substring(2, 7);
+                addPrivateRoom(roomToken);
 
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "VoiceInvite", target: targetUser, room_id: roomToken }));
@@ -857,6 +939,7 @@ async fn index() -> Html<&'static str> {
             function acceptInvite() {
                 document.getElementById('toast').style.display = 'none';
                 if (pendingInviteRoom) {
+                    addPrivateRoom(pendingInviteRoom);
                     toggleVoiceChannel(pendingInviteRoom);
                     pendingInviteRoom = null;
                 }
@@ -962,7 +1045,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let history_event = ServerEvent::History { messages: history };
     let _ = sender.send(Message::Text(serde_json::to_string(&history_event).unwrap())).await;
 
-    // FIX: Scope the lock so `v_states` is dropped BEFORE any `.await` points
     let existing_voice_states = {
         let v_states = state.voice_states.lock().unwrap();
         v_states.iter().map(|(u, r)| (u.clone(), r.clone())).collect::<Vec<_>>()
@@ -1017,8 +1099,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         let evt = ServerEvent::VoiceSignal { from: username_clone.clone(), target, signal };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
-                    ClientEvent::VoiceInvite { target: _, room_id } => {
-                        let evt = ServerEvent::VoiceInvite { from: username_clone.clone(), room_id };
+                    ClientEvent::VoiceInvite { target, room_id } => {
+                        let evt = ServerEvent::VoiceInvite { from: username_clone.clone(), target, room_id };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
                     ClientEvent::VoiceStateUpdate { room_id } => {
@@ -1031,6 +1113,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             }
                         }
                         let evt = ServerEvent::VoiceStateUpdate { username: username_clone.clone(), room_id };
+                        let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
+                    }
+                    ClientEvent::DeleteVoiceRoom { room_id } => {
+                        let evt = ServerEvent::DeleteVoiceRoom { room_id };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
                     ClientEvent::Join { .. } => {}
