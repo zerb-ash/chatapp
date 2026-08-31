@@ -118,6 +118,8 @@ enum ServerEvent {
         group_id: String,
         group_name: String,
         member_count: usize,
+        online_count: usize,
+        created_at: u64,
         valid: bool,
     },
     ChannelViewers {
@@ -175,6 +177,7 @@ struct ChatGroup {
     name: String,
     owner: String,
     invite_code: String,
+    created_at: u64,
     text_channels: Vec<ChannelInfo>,
     voice_channels: Vec<ChannelInfo>,
     members: HashSet<String>,
@@ -1015,6 +1018,10 @@ fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
         name: clean.to_string(),
         owner: owner.to_string(),
         invite_code: invite.clone(),
+        created_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         text_channels: vec![ChannelInfo {
             id: "general".into(),
             name: "general".into(),
@@ -1081,6 +1088,16 @@ fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &st
     }
 }
 
+fn online_in_group(state: &AppState, members: &HashSet<String>) -> usize {
+    state
+        .users
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|u| members.contains(*u))
+        .count()
+}
+
 fn preview_invite(state: &AppState, conn_id: usize, username: &str, invite_code: &str) {
     let idx = state.invite_index.lock().unwrap();
     let group_id = idx.get(invite_code).cloned();
@@ -1095,6 +1112,8 @@ fn preview_invite(state: &AppState, conn_id: usize, username: &str, invite_code:
                 group_id: gid,
                 group_name: g.name.clone(),
                 member_count: g.members.len(),
+                online_count: online_in_group(state, &g.members),
+                created_at: g.created_at,
                 valid: true,
             }
         } else {
@@ -1104,6 +1123,8 @@ fn preview_invite(state: &AppState, conn_id: usize, username: &str, invite_code:
                 group_id: String::new(),
                 group_name: String::new(),
                 member_count: 0,
+                online_count: 0,
+                created_at: 0,
                 valid: false,
             }
         }
@@ -1114,6 +1135,8 @@ fn preview_invite(state: &AppState, conn_id: usize, username: &str, invite_code:
             group_id: String::new(),
             group_name: String::new(),
             member_count: 0,
+            online_count: 0,
+            created_at: 0,
             valid: false,
         }
     };

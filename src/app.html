@@ -154,32 +154,55 @@
         .body code { background: #2b2d31; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px; }
 
         .invite-card {
-            display: flex;
-            align-items: stretch;
-            margin-top: 8px;
+            margin-top: 4px;
             max-width: 432px;
-            background: #2b2d31;
-            border: 1px solid #1f2023;
             border-radius: 8px;
             overflow: hidden;
+            background: #2b2d31;
+            border: 1px solid rgba(0, 0, 0, 0.24);
         }
-        .invite-card-accent { width: 4px; background: #5865f2; flex-shrink: 0; }
-        .invite-card-content { flex: 1; padding: 12px 16px 14px; min-width: 0; }
-        .invite-card-tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #949ba4; margin-bottom: 4px; }
-        .invite-card-name { font-size: 16px; font-weight: 600; color: #f2f3f5; margin-bottom: 2px; }
-        .invite-card-meta { font-size: 13px; color: #b5bac1; margin-bottom: 12px; }
+        .invite-card-banner {
+            height: 60px;
+            background: linear-gradient(135deg, #1a1b1e 0%, #2b2d31 45%, #1e1f22 100%);
+        }
+        .invite-card-body { padding: 0 16px 16px; }
+        .invite-card-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: #313338;
+            border: 4px solid #2b2d31;
+            margin-top: -24px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .invite-card-name { font-size: 16px; font-weight: 700; color: #f2f3f5; margin-bottom: 6px; }
+        .invite-card-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
+        .invite-stat { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #b5bac1; font-weight: 500; }
+        .invite-stat .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .invite-stat .dot.green { background: #23a559; }
+        .invite-stat .dot.grey { background: #80848e; }
+        .invite-card-est { font-size: 12px; color: #949ba4; margin-top: 2px; }
         .invite-card-join {
-            padding: 8px 14px;
-            background: #23a559;
+            width: 100%;
+            margin-top: 14px;
+            padding: 10px 16px;
+            background: #248046;
             color: #fff;
             border: none;
             border-radius: 4px;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 14px;
             cursor: pointer;
         }
-        .invite-card-join:hover { background: #1a7d43; }
+        .invite-card-join:hover { background: #1a6334; }
         .invite-card-join:disabled { background: #4e5058; cursor: not-allowed; }
+        .invite-card.invalid .invite-card-name { color: #949ba4; }
 
         .input-container { padding: 0 16px 24px; position: relative; flex-shrink: 0; }
         #typing-indicator { position: absolute; top: -18px; left: 20px; font-size: 12px; color: #b5bac1; font-style: italic; min-height: 16px; }
@@ -527,12 +550,25 @@
         ws.send(JSON.stringify({ type: "PreviewInvite", invite_code: code }));
     }
 
+    function formatEstDate(ts) {
+        if (!ts) return "";
+        const d = new Date(ts * 1000);
+        return `Est. ${d.toLocaleString("en-US", { month: "short", year: "numeric" })}`;
+    }
+
     function buildInviteEmbed(code) {
         const p = invitePreviews[code];
         const name = p ? (p.valid ? p.group_name : "Invalid Invite") : "Loading...";
-        const meta = p ? (p.valid ? `${p.member_count} Member${p.member_count !== 1 ? "s" : ""}` : "This invite may have expired") : "";
+        const icon = p?.valid ? p.group_name.charAt(0).toUpperCase() : "?";
+        const online = p?.online_count ?? 0;
+        const members = p?.member_count ?? 0;
+        const est = p?.created_at ? formatEstDate(p.created_at) : "";
         const disabled = p && !p.valid ? " disabled" : "";
-        return `<div class="invite-card" data-invite="${escapeHtml(code)}"><div class="invite-card-accent"></div><div class="invite-card-content"><div class="invite-card-tag">Room Invite</div><div class="invite-card-name">${escapeHtml(name)}</div><div class="invite-card-meta">${escapeHtml(meta)}</div><button type="button" class="invite-card-join${disabled}" data-invite="${escapeHtml(code)}">Join Room</button></div></div>`;
+        const invalidClass = p && !p.valid ? " invalid" : "";
+        const stats = p && p.valid
+            ? `<div class="invite-card-stats"><span class="invite-stat online"><span class="dot green"></span>${online} Online</span><span class="invite-stat"><span class="dot grey"></span>${members} Member${members !== 1 ? "s" : ""}</span></div>${est ? `<div class="invite-card-est">${escapeHtml(est)}</div>` : ""}`
+            : (p && !p.valid ? `<div class="invite-card-est">This invite may have expired</div>` : "");
+        return `<div class="invite-card${invalidClass}" data-invite="${escapeHtml(code)}"><div class="invite-card-banner"></div><div class="invite-card-body"><div class="invite-card-icon">${escapeHtml(icon)}</div><div class="invite-card-name">${escapeHtml(name)}</div>${stats}<button type="button" class="invite-card-join${disabled}" data-invite="${escapeHtml(code)}">Go to Server</button></div></div>`;
     }
 
     function refreshInviteCards() {
@@ -1002,29 +1038,36 @@
         clearPastedImage();
     }
 
+    function formatMarkdownChunk(text) {
+        let safeText = escapeHtml(text);
+        let parsedHTML = marked.parse(safeText);
+        parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
+        parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
+        parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
+        return parsedHTML;
+    }
+
+    function formatMessageBody(rawPlaintext) {
+        const inviteRe = /(?:https?:\/\/[^\s]*)?#invite=(inv-[a-z0-9]+)/gi;
+        let html = "";
+        let last = 0;
+        let match;
+        while ((match = inviteRe.exec(rawPlaintext)) !== null) {
+            if (match.index > last) html += formatMarkdownChunk(rawPlaintext.slice(last, match.index));
+            requestInvitePreview(match[1]);
+            html += buildInviteEmbed(match[1]);
+            last = match.index + match[0].length;
+        }
+        if (last < rawPlaintext.length) html += formatMarkdownChunk(rawPlaintext.slice(last));
+        return DOMPurify.sanitize(html);
+    }
+
     function renderMessage(msg) {
         const box = document.getElementById("messages");
         const rawPlaintext = msg.text;
         const sender = msg.username || "Anonymous";
         const initial = sender.charAt(0).toUpperCase();
-
-        let safeText = escapeHtml(rawPlaintext);
-        const invitePlaceholders = {};
-        let inviteIdx = 0;
-        safeText = safeText.replace(/(?:https?:\/\/[^\s]*)?#invite=(inv-[a-z0-9]+)/gi, (_, code) => {
-            requestInvitePreview(code);
-            const key = `__INVITE_${inviteIdx++}__`;
-            invitePlaceholders[key] = code;
-            return key;
-        });
-        let parsedHTML = marked.parse(safeText);
-        for (const [key, code] of Object.entries(invitePlaceholders)) {
-            parsedHTML = parsedHTML.replace(new RegExp(key, "g"), buildInviteEmbed(code));
-        }
-        parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
-        parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
-        parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
-        const cleanBody = DOMPurify.sanitize(parsedHTML);
+        const cleanBody = formatMessageBody(rawPlaintext);
 
         const msgDate = new Date(msg.timestamp * 1000);
         const timeStr = msgDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1145,11 +1188,12 @@
             ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: currentRoom }));
         }
 
-        Object.keys(roomMembers).forEach(targetUser => {
-            if (targetUser !== myUsername && roomMembers[targetUser] === currentRoom) {
-                createPeerConnection(targetUser);
-            }
-        });
+        const peers = Object.keys(roomMembers).filter(
+            u => u !== myUsername && roomMembers[u] === currentRoom
+        );
+        for (const targetUser of peers) {
+            await createPeerConnection(targetUser);
+        }
 
         startSpeakingMonitor();
     }
@@ -1189,7 +1233,7 @@
         renderVCRosters();
     }
 
-    function handleVoiceStateUpdate(username, roomId) {
+    async function handleVoiceStateUpdate(username, roomId) {
         if (roomId) {
             roomMembers[username] = roomId;
             if (roomId.startsWith("priv-")) addPrivateRoom(roomId);
@@ -1209,7 +1253,7 @@
         }
 
         if (currentRoom && roomId === currentRoom && username !== myUsername) {
-            createPeerConnection(username);
+            await createPeerConnection(username);
             playVcSound("connect");
         }
 
@@ -1298,11 +1342,16 @@
             audioEl = document.createElement("audio");
             audioEl.id = `audio-${userId}`;
             audioEl.autoplay = true;
+            audioEl.playsInline = true;
             document.getElementById("remote-audio-container").appendChild(audioEl);
         }
-        audioEl.srcObject = new MediaStream([track]);
+        const stream = audioEl.srcObject instanceof MediaStream ? audioEl.srcObject : new MediaStream();
+        stream.getAudioTracks().forEach(t => stream.removeTrack(t));
+        stream.addTrack(track);
+        audioEl.srcObject = stream;
         audioEl.muted = isDeafened;
         audioEl.play().catch(() => {});
+        track.onunmute = () => audioEl.play().catch(() => {});
     }
 
     function ensureVideoTile(userId, isLocal) {
@@ -1436,24 +1485,32 @@
         }
     }
 
-    function createPeerConnection(targetUser) {
-        if (peerConnections[targetUser]) return peerConnections[targetUser];
+    async function renegotiatePeer(targetUser, pc) {
+        if (!pc || pc._suppressNegotiation || pc.signalingState !== "stable") return;
+        try {
+            pc.makingOffer = true;
+            await pc.setLocalDescription(await pc.createOffer());
+            sendVoiceSignal(targetUser, { sdp: pc.localDescription });
+            if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
+        } catch (err) {
+            console.error("Renegotiate error:", err);
+        } finally {
+            pc.makingOffer = false;
+        }
+    }
+
+    async function createPeerConnection(targetUser, { incoming = false } = {}) {
+        if (peerConnections[targetUser]) {
+            if (peerConnections[targetUser]._ready) await peerConnections[targetUser]._ready;
+            return peerConnections[targetUser];
+        }
 
         const pc = new RTCPeerConnection(rtcConfig);
         pc.makingOffer = false;
         pc.polite = isPolite(targetUser);
+        pc._suppressNegotiation = incoming;
         peerConnections[targetUser] = pc;
         iceQueues[targetUser] = [];
-
-        const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
-        if (localStream) {
-            const audioTrack = localStream.getAudioTracks()[0];
-            if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
-        }
-
-        videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "inactive" });
-
-        if (localScreenStream) addScreenShareToPeer(targetUser, pc);
 
         pc.ontrack = (evt) => {
             if (evt.track.kind === "audio") attachAudioTrack(targetUser, evt.track);
@@ -1465,6 +1522,7 @@
         };
 
         pc.onnegotiationneeded = async () => {
+            if (pc._suppressNegotiation) return;
             try {
                 pc.makingOffer = true;
                 await pc.setLocalDescription();
@@ -1479,13 +1537,33 @@
 
         pc.onconnectionstatechange = () => {
             if (pc.connectionState === "failed") pc.restartIce();
+            if (pc.connectionState === "connected") syncPeerMedia(targetUser, pc);
         };
+
+        pc._ready = (async () => {
+            const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) await audioTransceiver.sender.replaceTrack(audioTrack);
+            }
+
+            videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "inactive" });
+
+            if (localScreenStream) await addScreenShareToPeer(targetUser, pc);
+        })();
+        await pc._ready;
+
+        if (!incoming && !pc.polite && pc.signalingState === "stable") {
+            await renegotiatePeer(targetUser, pc);
+        }
 
         return pc;
     }
 
     async function handleVoiceSignal(fromUser, signal) {
-        const pc = peerConnections[fromUser] || createPeerConnection(fromUser);
+        let pc = peerConnections[fromUser];
+        if (!pc) pc = await createPeerConnection(fromUser, { incoming: true });
+        else if (pc._ready) await pc._ready;
 
         if (signal.sdp) {
             const description = signal.sdp;
@@ -1505,6 +1583,8 @@
                 console.error("setRemoteDescription failed:", err);
                 return;
             }
+
+            pc._suppressNegotiation = false;
 
             if (iceQueues[fromUser]) {
                 while (iceQueues[fromUser].length > 0) {
@@ -1598,6 +1678,7 @@
 
             for (const [target, pc] of Object.entries(peerConnections)) {
                 await addScreenShareToPeer(target, pc);
+                await renegotiatePeer(target, pc);
             }
             setTimeout(refreshAllScreenEncodings, 500);
             setTimeout(refreshAllScreenEncodings, 2000);
@@ -1620,6 +1701,7 @@
 
         for (const [target, pc] of Object.entries(peerConnections)) {
             await removeScreenShareFromPeer(target, pc);
+            await renegotiatePeer(target, pc);
         }
         screenShareSenders = {};
 
