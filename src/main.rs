@@ -780,6 +780,62 @@ fn disconnect_user(state: &AppState, username: &str, reason: &str) {
     );
 }
 
+fn drop_connection(state: &AppState, conn_id: usize) {
+    if !state.users.lock().unwrap().contains_key(&conn_id)
+        && !state.conn_states.lock().unwrap().contains_key(&conn_id)
+    {
+        return;
+    }
+
+    let old_channel = state
+        .conn_states
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|c| (c.group_id.clone(), c.channel_id.clone()));
+
+    let mut users = state.users.lock().unwrap();
+    let username = users.remove(&conn_id);
+    state.conn_states.lock().unwrap().remove(&conn_id);
+    state.admin_sessions.lock().unwrap().remove(&conn_id);
+    state.admin_auth_fails.lock().unwrap().remove(&conn_id);
+    drop(users);
+
+    if let Some(username) = username {
+        state.user_conns.lock().unwrap().remove(&username);
+        let active: Vec<String> = state.users.lock().unwrap().values().cloned().collect();
+        broadcast(state, &ServerEvent::UserList { users: active });
+
+        if state.voice_states.lock().unwrap().remove(&username).is_some() {
+            broadcast(
+                state,
+                &ServerEvent::VoiceStateUpdate {
+                    username: username.clone(),
+                    room_id: None,
+                },
+            );
+        }
+
+        let mut groups = state.groups.lock().unwrap();
+        for g in groups.values_mut() {
+            g.close_votes.remove(&username);
+        }
+    }
+
+    if let Some((gid, cid)) = old_channel {
+        broadcast_channel_viewers(state, &gid, &cid);
+    }
+    notify_admin_dashboards(state);
+}
+
+fn force_disconnect_user(state: &AppState, username: &str, reason: &str) {
+    let conn_id = state.user_conns.lock().unwrap().get(username).copied();
+    if let Some(conn_id) = conn_id {
+        disconnect_user(state, username, reason);
+        drop_connection(state, conn_id);
+    }
+}
+
 fn count_group_messages(g: &ChatGroup) -> usize {
     g.messages.values().map(|q| q.len()).sum()
 }
@@ -1187,23 +1243,34 @@ fn admin_reset_invite(state: &AppState, group_id: &str) {
 }
 
 fn admin_clear_messages(state: &AppState, group_id: &str, channel_id: Option<&str>) {
+    let mut cleared = 0u64;
     if group_id == HUB_ID {
         let mut hub = state.hub_messages.lock().unwrap();
         if let Some(cid) = channel_id {
-            hub.remove(cid);
+            if let Some(q) = hub.remove(cid) {
+                cleared = q.len() as u64;
+            }
         } else {
+            cleared = hub.values().map(|q| q.len()).sum::<usize>() as u64;
             hub.clear();
         }
-        return;
-    }
-    let mut groups = state.groups.lock().unwrap();
-    let Some(g) = groups.get_mut(group_id) else {
-        return;
-    };
-    if let Some(cid) = channel_id {
-        g.messages.remove(cid);
     } else {
-        g.messages.clear();
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        if let Some(cid) = channel_id {
+            if let Some(q) = g.messages.remove(cid) {
+                cleared = q.len() as u64;
+            }
+        } else {
+            cleared = g.messages.values().map(|q| q.len()).sum::<usize>() as u64;
+            g.messages.clear();
+        }
+    }
+    if cleared > 0 {
+        let mut total = state.total_messages.lock().unwrap();
+        *total = total.saturating_sub(cleared);
     }
 }
 
@@ -1397,7 +1464,7 @@ fn handle_admin_action(
                 room_ban: false,
                 reason: "Banned by admin".into(),
             });
-            disconnect_user(state, target, "You have been banned.");
+            force_disconnect_user(state, target, "You have been banned.");
             send_global_admin_action(state, target);
         }
         "ban_device" => {
@@ -1417,7 +1484,7 @@ fn handle_admin_action(
                     .map(|c| c.username.clone())
                     .collect();
                 for u in victims {
-                    disconnect_user(&state, &u, "This device has been banned.");
+                    force_disconnect_user(&state, &u, "This device has been banned.");
                     send_global_admin_action(&state, &u);
                 }
             }
@@ -1502,7 +1569,7 @@ fn handle_admin_action(
         }
         "kick_user" => {
             if !target.is_empty() {
-                disconnect_user(state, target, "Kicked by admin.");
+                force_disconnect_user(state, target, "Kicked by admin.");
             }
         }
         "rename_user" => {
@@ -2033,45 +2100,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 }
 
 async fn cleanup_conn(state: &AppState, conn_id: usize) {
-    let old_channel = state
-        .conn_states
-        .lock()
-        .unwrap()
-        .get(&conn_id)
-        .map(|c| (c.group_id.clone(), c.channel_id.clone()));
-
-    let mut users = state.users.lock().unwrap();
-    let username = users.remove(&conn_id);
-    state.conn_states.lock().unwrap().remove(&conn_id);
-    state.admin_sessions.lock().unwrap().remove(&conn_id);
-    state.admin_auth_fails.lock().unwrap().remove(&conn_id);
-    drop(users);
-
-    if let Some(username) = username {
-        state.user_conns.lock().unwrap().remove(&username);
-        let active: Vec<String> = state.users.lock().unwrap().values().cloned().collect();
-        broadcast(state, &ServerEvent::UserList { users: active });
-
-        if state.voice_states.lock().unwrap().remove(&username).is_some() {
-            broadcast(
-                state,
-                &ServerEvent::VoiceStateUpdate {
-                    username: username.clone(),
-                    room_id: None,
-                },
-            );
-        }
-
-        let mut groups = state.groups.lock().unwrap();
-        for g in groups.values_mut() {
-            g.close_votes.remove(&username);
-        }
-    }
-
-    if let Some((gid, cid)) = old_channel {
-        broadcast_channel_viewers(state, &gid, &cid);
-    }
-    notify_admin_dashboards(state);
+    drop_connection(state, conn_id);
 }
 
 async fn handle_client_event(

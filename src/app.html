@@ -637,18 +637,35 @@
             ._xChip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
             ._xChip button{border:none;background:transparent;color:#949ba4;cursor:pointer;padding:0;font-size:14px;line-height:1}
             ._xChip button:hover{color:#da373c}
-            ._xDrop{position:relative;display:inline-block}
-            ._xDrop>summary{list-style:none;cursor:pointer;background:#5865f2;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;user-select:none}
-            ._xDrop>summary::-webkit-details-marker{display:none}
-            ._xDrop>summary:hover{background:#4752c4}
-            ._xMenu{position:absolute;right:0;top:calc(100% + 6px);min-width:200px;max-width:260px;background:#1e1f22;border:1px solid #3f4147;border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:10;display:flex;flex-direction:column;gap:2px}
-            ._xMenuLabel{padding:6px 10px 4px;font-size:10px;font-weight:700;text-transform:uppercase;color:#949ba4;letter-spacing:.04em}
-            ._xMenuItem{display:block;width:100%;text-align:left;border:none;border-radius:4px;padding:8px 10px;font-size:12px;font-weight:500;cursor:pointer;color:#dbdee1;background:transparent}
-            ._xMenuItem:hover{background:#35373c;color:#fff}
-            ._xMenuItem.bad{color:#ed4245}
-            ._xMenuItem.bad:hover{background:#da373c;color:#fff}
-            ._xMenuItem.good{color:#23a559}
-            ._xMenuItem.warn{color:#f0b232}
+            ._xPopBtn{background:transparent;border:1px solid #4e5058;color:#b5bac1;border-radius:6px;width:32px;height:28px;cursor:pointer;font-size:16px;line-height:1;padding:0}
+            ._xPopBtn:hover{background:#35373c;color:#fff;border-color:#5865f2}
+            ._xPop{position:fixed;z-index:501;display:none;min-width:150px;max-width:180px;max-height:220px;overflow-y:auto;background:#1e1f22;border:1px solid #3f4147;border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.55)}
+            ._xPop.open{display:block}
+            ._xPopLabel{padding:5px 8px 2px;font-size:9px;font-weight:700;text-transform:uppercase;color:#72767d;letter-spacing:.05em}
+            ._xPopItem{display:block;width:100%;text-align:left;border:none;border-radius:4px;padding:7px 8px;font-size:12px;font-weight:500;cursor:pointer;color:#dbdee1;background:transparent;white-space:nowrap}
+            ._xPopItem:hover{background:#35373c;color:#fff}
+            ._xPopItem.bad{color:#ed4245}
+            ._xPopItem.good{color:#23a559}
+            ._xPopItem.warn{color:#f0b232}
+            ._xNameBtn{background:none;border:none;padding:0;font:inherit;font-weight:600;color:#f2f3f5;cursor:pointer;text-align:left}
+            ._xNameBtn:hover{color:#5865f2;text-decoration:underline}
+            ._xMemberBtn{background:none;border:none;padding:0;font:inherit;color:#dbdee1;cursor:pointer;text-align:left}
+            ._xMemberBtn:hover{color:#5865f2;text-decoration:underline}
+            ._xModal{position:fixed;inset:0;z-index:502;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;padding:20px}
+            ._xModal.open{display:flex}
+            ._xModalBox{background:#2b2d31;border:1px solid #1f2023;border-radius:10px;padding:20px;width:100%;max-width:380px;max-height:min(80vh,520px);overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+            ._xModalBox h3{margin:0 0 4px;color:#f2f3f5;font-size:18px}
+            ._xModalSub{color:#949ba4;font-size:12px;margin-bottom:16px;line-height:1.5}
+            ._xModalSec{margin-bottom:14px}
+            ._xModalSec h4{margin:0 0 6px;font-size:10px;font-weight:700;text-transform:uppercase;color:#949ba4;letter-spacing:.05em}
+            ._xModalActs{display:flex;flex-wrap:wrap;gap:6px}
+            ._xModalAct{padding:7px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;color:#fff;background:#4e5058}
+            ._xModalAct:hover{filter:brightness(1.1)}
+            ._xModalAct.n{background:#5865f2}
+            ._xModalAct.g{background:#23a559}
+            ._xModalAct.w{background:#f0b232;color:#1e1f22}
+            ._xModalAct.b{background:#da373c}
+            ._xModalClose{margin-top:16px;width:100%;padding:9px;border:none;border-radius:6px;background:#4e5058;color:#fff;font-weight:600;cursor:pointer}
             ._xMembers{display:flex;flex-direction:column;gap:4px}
             ._xMember{display:flex;align-items:center;gap:6px;font-size:13px;color:#dbdee1}
             ._xMember .crown{font-size:11px}
@@ -667,6 +684,159 @@
         if (_xRoot) { _xRoot.remove(); _xRoot = null; }
         if (_xRailBtn) { _xRailBtn.remove(); _xRailBtn = null; }
         if (_xPrompt) { _xPrompt.remove(); _xPrompt = null; }
+        _xClosePop();
+        _xCloseModal();
+    }
+
+    function _xClosePop() {
+        const pop = document.getElementById("_xPop");
+        if (pop) pop.classList.remove("open");
+    }
+
+    function _xCloseModal() {
+        const m = document.getElementById("_xModal");
+        if (m) m.classList.remove("open");
+    }
+
+    function _xEnsurePop() {
+        if (document.getElementById("_xPop")) return;
+        const pop = document.createElement("div");
+        pop.id = "_xPop";
+        pop.className = "_xPop";
+        document.body.appendChild(pop);
+    }
+
+    function _xEnsureModal() {
+        if (document.getElementById("_xModal")) return;
+        const m = document.createElement("div");
+        m.id = "_xModal";
+        m.className = "_xModal";
+        m.innerHTML = `<div class="_xModalBox" id="_xModalBox"></div>`;
+        document.body.appendChild(m);
+        m.addEventListener("click", (e) => { if (e.target === m) _xCloseModal(); });
+    }
+
+    function _xShowPop(anchor, html) {
+        _xEnsurePop();
+        _xCloseModal();
+        const pop = document.getElementById("_xPop");
+        pop.innerHTML = html;
+        pop.classList.add("open");
+        const r = anchor.getBoundingClientRect();
+        let top = r.bottom + 4;
+        let left = r.right - 170;
+        if (left < 8) left = 8;
+        if (top + 220 > window.innerHeight) top = r.top - 224;
+        pop.style.top = `${top}px`;
+        pop.style.left = `${left}px`;
+        pop.onclick = (e) => {
+            const btn = e.target.closest("[data-act]");
+            if (btn) { e.stopPropagation(); _xHandleAct(btn); }
+        };
+    }
+
+    function _xShowModal(title, sub, sectionsHtml) {
+        _xEnsureModal();
+        _xClosePop();
+        const box = document.getElementById("_xModalBox");
+        box.innerHTML = `<h3>${title}</h3><div class="_xModalSub">${sub}</div>${sectionsHtml}<button class="_xModalClose" type="button">Close</button>`;
+        box.querySelector("._xModalClose").addEventListener("click", _xCloseModal);
+        box.onclick = (e) => {
+            const btn = e.target.closest("[data-act]");
+            if (btn) { e.stopPropagation(); _xHandleAct(btn); }
+        };
+        document.getElementById("_xModal").classList.add("open");
+    }
+
+    function _xModalSec(label, actsHtml) {
+        return `<div class="_xModalSec"><h4>${label}</h4><div class="_xModalActs">${actsHtml}</div></div>`;
+    }
+
+    function _xModalAct(act, label, tgt, opts = {}) {
+        const cls = opts.cls ? ` _xModalAct ${opts.cls}` : " _xModalAct";
+        let attrs = `class="${cls.trim()}" data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
+        if (opts.dev) attrs += ` data-dev="${escapeHtml(opts.dev)}"`;
+        if (opts.grp) attrs += ` data-grp="${escapeHtml(opts.grp)}"`;
+        if (opts.prompt) attrs += ` data-prompt="${escapeHtml(opts.prompt)}"`;
+        if (opts.xPick) attrs += ` data-x-pick="${opts.xPick}" data-pick-label="${escapeHtml(opts.pickLabel || "")}"`;
+        return `<button type="button" ${attrs}>${label}</button>`;
+    }
+
+    function _xPopItem(act, label, tgt, opts = {}) {
+        const cls = opts.cls ? ` _xPopItem ${opts.cls}` : " _xPopItem";
+        let attrs = `class="${cls.trim()}" data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
+        if (opts.dev) attrs += ` data-dev="${escapeHtml(opts.dev)}"`;
+        if (opts.grp) attrs += ` data-grp="${escapeHtml(opts.grp)}"`;
+        if (opts.prompt) attrs += ` data-prompt="${escapeHtml(opts.prompt)}"`;
+        if (opts.xPick) attrs += ` data-x-pick="${opts.xPick}" data-pick-label="${escapeHtml(opts.pickLabel || "")}"`;
+        return `<button type="button" ${attrs}>${label}</button>`;
+    }
+
+    function _xHandleAct(btn) {
+        if (!btn || !_xValid()) return;
+        let val = btn.dataset.val || null;
+        if (btn.dataset.prompt) {
+            const input = prompt(btn.dataset.prompt);
+            if (input === null || input.trim() === "") return;
+            val = input.trim();
+        }
+        if (btn.dataset.xPick === "room") {
+            const gid = _xRoomPick(btn.dataset.pickLabel || "Select room", _xLastData?.rooms || []);
+            if (!gid) return;
+            _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, gid, val);
+        } else if (btn.dataset.xPick === "timeout") {
+            const input = prompt("Room id, timeout seconds (e.g. grp-abc,300):");
+            if (!input) return;
+            const parts = input.split(",").map(s => s.trim());
+            if (parts.length < 2) return;
+            _xAct(btn.dataset.act, btn.dataset.tgt || "", null, parts[0], parts[1]);
+        } else {
+            _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, btn.dataset.grp || null, val);
+        }
+        _xClosePop();
+        _xCloseModal();
+    }
+
+    function _xShowUserModal(u) {
+        const sub = `${escapeHtml(u.group_id)} / ${escapeHtml(u.channel_id)} · ${u.in_voice ? "In voice" : "Not in voice"}<br>Device: ${escapeHtml(u.device_id)}`;
+        let html = _xModalSec("Navigate", _xModalAct("follow_user", "Follow", u.username, { cls: "n" }) + _xModalAct("rename_user", "Rename", u.username, { prompt: "New username:" }));
+        let roomActs = _xModalAct("add_to_room", "Add to room", u.username, { cls: "n", xPick: "room", pickLabel: "Add to room" })
+            + _xModalAct("force_join_room", "Force into room", u.username, { cls: "n", xPick: "room", pickLabel: "Force into room" });
+        (u.rooms || []).forEach(r => {
+            roomActs += _xModalAct("remove_from_room", `Remove from ${r.name}`, u.username, { cls: "b", grp: r.id })
+                + _xModalAct("force_join_room", `Force into ${r.name}`, u.username, { cls: "n", grp: r.id });
+        });
+        html += _xModalSec("Rooms", roomActs);
+        html += _xModalSec("Moderation",
+            _xModalAct("global_mute", "Mute", u.username, { cls: "w" })
+            + _xModalAct("global_unmute", "Unmute", u.username, { cls: "g" })
+            + _xModalAct("room_timeout", "Timeout", u.username, { xPick: "timeout" })
+            + _xModalAct("room_ban_user", "Room ban", u.username, { dev: u.device_id, cls: "w" })
+            + _xModalAct("ban_device", "Ban device", u.username, { dev: u.device_id, cls: "b" })
+            + _xModalAct("ban_user", "Ban user", u.username, { dev: u.device_id, cls: "b" })
+            + _xModalAct("kick_user", "Kick", u.username, { cls: "b" }));
+        _xShowModal(escapeHtml(u.username) + (u.globally_muted ? " 🔇" : ""), sub, html);
+    }
+
+    function _xShowMemberModal(member, room) {
+        const isOwner = member === room.owner;
+        const sub = `Room: ${escapeHtml(room.name)} (${escapeHtml(room.id)})${isOwner ? " · Owner" : ""}`;
+        let html = "";
+        if (!isOwner) {
+            html += _xModalSec("Member actions",
+                _xModalAct("transfer_owner", "Make owner", member, { cls: "g", grp: room.id })
+                + _xModalAct("kick_from_room", "Kick from room", member, { cls: "b", grp: room.id })
+                + _xModalAct("room_mute", "Force mute", member, { cls: "w", grp: room.id })
+                + _xModalAct("room_deafen", "Force deafen", member, { cls: "w", grp: room.id })
+                + _xModalAct("force_join_room", "Force into room", member, { cls: "n", grp: room.id }));
+        } else {
+            html += _xModalSec("Owner", `<span class="_xEmpty">Transfer ownership to another member first.</span>`);
+        }
+        html += _xModalSec("Global user",
+            _xModalAct("follow_user", "Follow user", member, { cls: "n" })
+            + _xModalAct("global_mute", "Global mute", member, { cls: "w" })
+            + _xModalAct("kick_user", "Kick from server", member, { cls: "b" }));
+        _xShowModal(escapeHtml(member), sub, html);
     }
 
     function _xEnsureUi() {
@@ -683,39 +853,51 @@
             <div class="_xSec"><h3>Restrictions</h3><div class="_xTblWrap"><table class="_xTbl" data-x="bans"><thead><tr><th>User</th><th>Device</th><th>Type</th><th>Reason</th><th></th></tr></thead><tbody></tbody></table></div></div>
         </div>`;
         document.body.appendChild(_xRoot);
-        _xRoot.querySelector('[data-x="cls"]').addEventListener("click", () => { _xRoot.style.display = "none"; });
+        _xRoot.querySelector('[data-x="cls"]').addEventListener("click", () => { _xRoot.style.display = "none"; _xClosePop(); _xCloseModal(); });
         _xRoot.addEventListener("click", (e) => {
+            const nameBtn = e.target.closest("[data-x-user]");
+            if (nameBtn) { _xShowUserModal(_xLastData.active_users[parseInt(nameBtn.dataset.xUser, 10)]); return; }
+            const memberBtn = e.target.closest("[data-x-member]");
+            if (memberBtn) {
+                const ri = parseInt(memberBtn.dataset.xRoom, 10);
+                _xShowMemberModal(memberBtn.dataset.xMember, _xLastData.rooms[ri]);
+                return;
+            }
+            const popBtn = e.target.closest("[data-x-pop]");
+            if (popBtn) {
+                e.stopPropagation();
+                const kind = popBtn.dataset.xPop;
+                if (kind === "user") {
+                    const u = _xLastData.active_users[parseInt(popBtn.dataset.xIdx, 10)];
+                    _xShowPop(popBtn, _xPopItem("follow_user", "Follow", u.username) + _xPopItem("kick_user", "Kick", u.username, { cls: "bad" }));
+                } else if (kind === "room") {
+                    const r = _xLastData.rooms[parseInt(popBtn.dataset.xIdx, 10)];
+                    _xShowPop(popBtn,
+                        _xPopItem("rename_room", "Rename", "", { prompt: "New room name:", grp: r.id })
+                        + _xPopItem("reset_invite", "New invite", "", { grp: r.id })
+                        + _xPopItem("clear_messages", "Clear msgs", "", { cls: "warn", grp: r.id })
+                        + _xPopItem("delete_room", "Delete", "", { cls: "bad", grp: r.id }));
+                } else if (kind === "ban") {
+                    const b = _xLastData.bans[parseInt(popBtn.dataset.xIdx, 10)];
+                    let h = "";
+                    if (b.username) h += _xPopItem("unban_user", "Unban user", b.username, { cls: "good" });
+                    if (b.device_id) h += _xPopItem("unban_device", "Unban device", "", { dev: b.device_id, cls: "good" });
+                    _xShowPop(popBtn, h);
+                }
+                return;
+            }
             const btn = e.target.closest("[data-act]");
-            if (!btn || !_xValid()) return;
-            const details = btn.closest("details");
-            let val = btn.dataset.val || null;
-            if (btn.dataset.prompt) {
-                const input = prompt(btn.dataset.prompt);
-                if (input === null || input.trim() === "") return;
-                val = input.trim();
-            }
-            if (btn.dataset.xPick === "room") {
-                const gid = _xRoomPick(btn.dataset.pickLabel || "Select room", _xLastData?.rooms || []);
-                if (!gid) return;
-                _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, gid, val);
-            } else if (btn.dataset.xPick === "timeout") {
-                const input = prompt("Room id, timeout seconds (e.g. grp-abc,300):");
-                if (!input) return;
-                const parts = input.split(",").map(s => s.trim());
-                if (parts.length < 2) return;
-                _xAct(btn.dataset.act, btn.dataset.tgt || "", null, parts[0], parts[1]);
-            } else {
-                _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, btn.dataset.grp || null, val);
-            }
-            if (details) details.open = false;
+            if (btn) _xHandleAct(btn);
         });
         if (!_xDocBound) {
             _xDocBound = true;
             document.addEventListener("click", (e) => {
-                if (!_xRoot || !_xRoot.contains(e.target)) return;
-                _xRoot.querySelectorAll("details._xDrop[open]").forEach(d => {
-                    if (!d.contains(e.target)) d.open = false;
-                });
+                const pop = document.getElementById("_xPop");
+                if (pop && pop.classList.contains("open") && !pop.contains(e.target) && !e.target.closest("[data-x-pop]")) _xClosePop();
+                const modal = document.getElementById("_xModal");
+                if (modal && modal.classList.contains("open") && e.target.closest("#_xModalBox [data-act]")) {
+                    _xHandleAct(e.target.closest("[data-act]"));
+                }
             });
         }
     }
@@ -807,21 +989,7 @@
             group_id: groupId || null,
             value: value || null
         }));
-    }
-
-    function _xMenuItem(act, label, tgt, opts = {}) {
-        const cls = opts.cls ? ` ${opts.cls}` : "";
-        let attrs = `class="_xMenuItem${cls}" data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
-        if (opts.dev) attrs += ` data-dev="${escapeHtml(opts.dev)}"`;
-        if (opts.grp) attrs += ` data-grp="${escapeHtml(opts.grp)}"`;
-        if (opts.prompt) attrs += ` data-prompt="${escapeHtml(opts.prompt)}"`;
-        if (opts.val) attrs += ` data-val="${escapeHtml(opts.val)}"`;
-        if (opts.xPick) attrs += ` data-x-pick="${opts.xPick}" data-pick-label="${escapeHtml(opts.pickLabel || "")}"`;
-        return `<button ${attrs}>${label}</button>`;
-    }
-
-    function _xDrop(menuHtml) {
-        return `<details class="_xDrop"><summary>Manage</summary><div class="_xMenu">${menuHtml}</div></details>`;
+        setTimeout(() => _xRefresh(), 120);
     }
 
     function _xRoomPick(promptText, rooms) {
@@ -841,6 +1009,7 @@
         _xExp = data.expires_at;
         _xEnsureRail();
         _xStartTimer();
+        _xClosePop();
         if (!_xRoot) return;
         _xTickUi();
         if (_xRoot.style.display === "none") return;
@@ -856,76 +1025,37 @@
 
         const usersBody = _xRoot.querySelector('[data-x="users"] tbody');
         usersBody.innerHTML = "";
-        data.active_users.forEach(u => {
+        data.active_users.forEach((u, i) => {
             const shortDev = u.device_id.length > 16 ? u.device_id.slice(0, 14) + "…" : u.device_id;
             const roomChips = (u.rooms || []).map(r =>
                 `<span class="_xChip"><span title="${escapeHtml(r.id)}">${escapeHtml(r.name)}</span><button type="button" data-act="remove_from_room" data-tgt="${escapeHtml(u.username)}" data-grp="${escapeHtml(r.id)}" title="Remove">×</button></span>`
             ).join("");
-            const roomsCell = roomChips
-                ? `<div class="_xChips">${roomChips}</div>`
-                : `<span class="_xEmpty">Hub only</span>`;
-
-            let menu = `<div class="_xMenuLabel">Navigate</div>`;
-            menu += _xMenuItem("follow_user", "Follow user", u.username);
-            menu += _xMenuItem("rename_user", "Rename user…", u.username, { prompt: "New username:" });
-            menu += `<div class="_xMenuLabel">Rooms</div>`;
-            menu += _xMenuItem("add_to_room", "Add to room…", u.username, { xPick: "room", pickLabel: "Add to room" });
-            menu += _xMenuItem("force_join_room", "Force into room…", u.username, { xPick: "room", pickLabel: "Force into room" });
-            (u.rooms || []).forEach(r => {
-                menu += _xMenuItem("force_join_room", `Force into ${r.name}`, u.username, { grp: r.id });
-            });
-            menu += `<div class="_xMenuLabel">Moderation</div>`;
-            menu += _xMenuItem("global_mute", "Global mute", u.username);
-            menu += _xMenuItem("global_unmute", "Global unmute", u.username, { cls: "good" });
-            menu += _xMenuItem("room_timeout", "Room timeout…", u.username, { xPick: "timeout" });
-            menu += _xMenuItem("room_ban_user", "Room ban", u.username, { dev: u.device_id, cls: "warn" });
-            menu += _xMenuItem("ban_device", "Ban device", u.username, { dev: u.device_id, cls: "bad" });
-            menu += _xMenuItem("ban_user", "Ban user", u.username, { dev: u.device_id, cls: "bad" });
-            menu += _xMenuItem("kick_user", "Kick from server", u.username, { cls: "bad" });
-
+            const roomsCell = roomChips ? `<div class="_xChips">${roomChips}</div>` : `<span class="_xEmpty">Hub only</span>`;
             const tr = document.createElement("tr");
             tr.innerHTML = `
-                <td><div class="_xUser">${escapeHtml(u.username)}${u.globally_muted ? " 🔇" : ""}</div><div class="_xMuted" title="${escapeHtml(u.device_id)}">${escapeHtml(shortDev)}</div></td>
+                <td><button type="button" class="_xNameBtn" data-x-user="${i}">${escapeHtml(u.username)}${u.globally_muted ? " 🔇" : ""}</button><div class="_xMuted" title="${escapeHtml(u.device_id)}">${escapeHtml(shortDev)}</div></td>
                 <td><div class="_xMeta">${escapeHtml(u.group_id)}<br>${escapeHtml(u.channel_id)}</div></td>
-                <td><div class="_xMeta">${u.in_voice ? "In voice" : "—"}${u.voice_room ? `<br><span title="${escapeHtml(u.voice_room)}">${escapeHtml(u.voice_room.split(":").pop() || "")}</span>` : ""}</div></td>
+                <td><div class="_xMeta">${u.in_voice ? "In voice" : "—"}</div></td>
                 <td>${roomsCell}</td>
-                <td>${_xDrop(menu)}</td>`;
+                <td><button type="button" class="_xPopBtn" data-x-pop="user" data-x-idx="${i}" title="Quick actions">⋯</button></td>`;
             usersBody.appendChild(tr);
         });
         if (!data.active_users.length) usersBody.innerHTML = `<tr><td colspan="5" class="_xEmpty" style="padding:18px">No active users</td></tr>`;
 
         const roomsBody = _xRoot.querySelector('[data-x="rooms"] tbody');
         roomsBody.innerHTML = "";
-        data.rooms.forEach(r => {
+        data.rooms.forEach((r, ri) => {
             const memberList = (r.members || []).map(m =>
-                `<div class="_xMember">${escapeHtml(m)}${m === r.owner ? ' <span class="crown">👑</span>' : ""}</div>`
+                `<div class="_xMember"><button type="button" class="_xMemberBtn" data-x-member="${escapeHtml(m)}" data-x-room="${ri}">${escapeHtml(m)}</button>${m === r.owner ? ' <span class="crown">👑</span>' : ""}</div>`
             ).join("") || `<span class="_xEmpty">No members</span>`;
-
-            let menu = `<div class="_xMenuLabel">Room</div>`;
-            menu += _xMenuItem("rename_room", "Rename…", "", { grp: r.id, prompt: "New room name:" });
-            menu += _xMenuItem("reset_invite", "Regenerate invite", "", { grp: r.id });
-            menu += _xMenuItem("clear_messages", "Clear messages", "", { grp: r.id, cls: "warn" });
-            menu += _xMenuItem("delete_room", "Delete room", "", { grp: r.id, cls: "bad" });
-            if ((r.members || []).length) {
-                menu += `<div class="_xMenuLabel">Members</div>`;
-                (r.members || []).forEach(m => {
-                    if (m !== r.owner) {
-                        menu += _xMenuItem("transfer_owner", `Make ${m} owner`, m, { grp: r.id, cls: "good" });
-                        menu += _xMenuItem("kick_from_room", `Kick ${m}`, m, { grp: r.id, cls: "bad" });
-                        menu += _xMenuItem("room_mute", `Mute ${m}`, m, { grp: r.id });
-                        menu += _xMenuItem("room_deafen", `Deafen ${m}`, m, { grp: r.id });
-                    }
-                });
-            }
-
             const shortInv = r.invite_code || "—";
             const tr = document.createElement("tr");
             tr.innerHTML = `
                 <td><div class="_xUser">${escapeHtml(r.name)}</div><div class="_xMuted">${escapeHtml(r.id)}</div></td>
                 <td>${escapeHtml(r.owner)}</td>
                 <td><div class="_xMembers">${memberList}</div></td>
-                <td><div class="_xMeta">${r.active_members} online · ${r.member_count} members<br>${formatAge(r.age_secs)} old · ${r.message_count} msgs<br><span title="${escapeHtml(r.invite_code || "")}">Invite: ${escapeHtml(shortInv.length > 14 ? shortInv.slice(0, 12) + "…" : shortInv)}</span></div></td>
-                <td>${_xDrop(menu)}</td>`;
+                <td><div class="_xMeta">${r.active_members} online · ${r.member_count} members<br>${formatAge(r.age_secs)} old · ${r.message_count} msgs<br><span title="${escapeHtml(r.invite_code || "")}">${escapeHtml(shortInv.length > 14 ? shortInv.slice(0, 12) + "…" : shortInv)}</span></div></td>
+                <td><button type="button" class="_xPopBtn" data-x-pop="room" data-x-idx="${ri}" title="Room actions">⋯</button></td>`;
             roomsBody.appendChild(tr);
         });
         if (!data.rooms.length) roomsBody.innerHTML = `<tr><td colspan="5" class="_xEmpty" style="padding:18px">No custom rooms</td></tr>`;
@@ -934,19 +1064,21 @@
         bansBody.innerHTML = "";
         if (!data.bans.length) {
             bansBody.innerHTML = `<tr><td colspan="5" class="_xEmpty" style="padding:18px">No active restrictions</td></tr>`;
-        } else data.bans.forEach(b => {
-            let menu = "";
-            if (b.username) menu += _xMenuItem("unban_user", "Unban user", b.username, { cls: "good" });
-            if (b.device_id) menu += _xMenuItem("unban_device", "Unban device", "", { dev: b.device_id, cls: "good" });
+        } else data.bans.forEach((b, bi) => {
             const tr = document.createElement("tr");
             tr.innerHTML = `
                 <td>${escapeHtml(b.username || "—")}</td>
                 <td class="_xMuted">${escapeHtml(b.device_id || "—")}</td>
                 <td>${b.room_ban ? "Room ban" : "Full ban"}</td>
                 <td>${escapeHtml(b.reason)}</td>
-                <td>${menu ? _xDrop(menu) : ""}</td>`;
+                <td><button type="button" class="_xPopBtn" data-x-pop="ban" data-x-idx="${bi}">⋯</button></td>`;
             bansBody.appendChild(tr);
         });
+
+        const modal = document.getElementById("_xModal");
+        if (modal && modal.classList.contains("open") && _xLastData) {
+            // keep modal open on live refresh — user can close manually
+        }
     }
 
     function _xNavigate(event) {
