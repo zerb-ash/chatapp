@@ -121,6 +121,14 @@ enum ServerEvent {
         timestamp: u64,
     },
     UserList { users: Vec<String> },
+    UserRenamed {
+        old_username: String,
+        new_username: String,
+    },
+    MessagesCleared {
+        group_id: String,
+        channel_id: Option<String>,
+    },
     Typing {
         group_id: String,
         channel_id: String,
@@ -1272,6 +1280,13 @@ fn admin_clear_messages(state: &AppState, group_id: &str, channel_id: Option<&st
         let mut total = state.total_messages.lock().unwrap();
         *total = total.saturating_sub(cleared);
     }
+    broadcast(
+        state,
+        &ServerEvent::MessagesCleared {
+            group_id: group_id.to_string(),
+            channel_id: channel_id.map(|c| c.to_string()),
+        },
+    );
 }
 
 fn admin_rename_user(state: &AppState, old: &str, new: &str) {
@@ -1384,8 +1399,27 @@ fn admin_rename_user(state: &AppState, old: &str, new: &str) {
     state.lifetime_users.lock().unwrap().remove(&old_exact);
     state.lifetime_users.lock().unwrap().insert(new.to_string());
 
+    let updated_groups: Vec<GroupInfo> = state
+        .groups
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, g)| g.members.contains(new))
+        .map(|(id, g)| group_info(id, g))
+        .collect();
+
     let active: Vec<String> = state.users.lock().unwrap().values().cloned().collect();
     broadcast(state, &ServerEvent::UserList { users: active });
+    broadcast(
+        state,
+        &ServerEvent::UserRenamed {
+            old_username: old_exact.clone(),
+            new_username: new.to_string(),
+        },
+    );
+    for g in updated_groups {
+        broadcast(state, &ServerEvent::GroupUpdated { group: g });
+    }
     send_to_user(
         state,
         new,
@@ -1394,6 +1428,7 @@ fn admin_rename_user(state: &AppState, old: &str, new: &str) {
         },
     );
     send_global_admin_action(state, new);
+    notify_admin_dashboards(state);
 }
 
 fn admin_follow_user(state: &AppState, admin_conn_id: usize, admin_name: &str, target: &str) {
@@ -1833,7 +1868,15 @@ fn delete_group(state: &AppState, group_id: &str) {
     let mut groups = state.groups.lock().unwrap();
     if let Some(g) = groups.remove(group_id) {
         state.invite_index.lock().unwrap().remove(&g.invite_code);
+        let affected_members: Vec<String> = g.members.iter().cloned().collect();
         drop(groups);
+
+        broadcast(
+            state,
+            &ServerEvent::GroupDeleted {
+                group_id: group_id.to_string(),
+            },
+        );
 
         let mut voice = state.voice_states.lock().unwrap();
         let prefix = format!("{group_id}:");
@@ -1868,7 +1911,11 @@ fn delete_group(state: &AppState, group_id: &str) {
 
         state.mod_states.lock().unwrap().remove(group_id);
 
-        broadcast(state, &ServerEvent::GroupDeleted { group_id: group_id.to_string() });
+        for member in affected_members {
+            if state.user_conns.lock().unwrap().contains_key(&member) {
+                send_group_list(state, 0, &member);
+            }
+        }
         notify_admin_dashboards(state);
     }
 }
@@ -1917,7 +1964,8 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
             let gid = val.get("group_id").and_then(|t| t.as_str()).unwrap_or("");
             conn_in_group(state, conn_id, gid)
         }
-        "GroupCreated" | "GroupUpdated" | "GroupDeleted" | "CloseVoteUpdate" => {
+        "GroupDeleted" => true,
+        "GroupCreated" | "GroupUpdated" | "CloseVoteUpdate" => {
             let gid = val.get("group_id")
                 .or_else(|| val.get("group").and_then(|g| g.get("id")))
                 .and_then(|t| t.as_str())
@@ -1937,6 +1985,7 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
         "GroupList" | "InvitePreview" | "KickedFromGroup" | "ModUpdate" | "GlobalAdminAction" => {
             val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
         }
+        "UserRenamed" | "MessagesCleared" => true,
         "AdminAuthResult" => {
             val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
         }

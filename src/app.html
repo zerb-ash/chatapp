@@ -1441,8 +1441,53 @@
         delete groups[groupId];
         if (localStorage.getItem("rc_active_group") === groupId) localStorage.setItem("rc_active_group", "hub");
         if (currentRoom && currentRoom.startsWith(groupId + ":")) leaveVoiceChannel(true);
-        if (activeGroupId === groupId) switchGroup("hub");
-        else renderServerRail();
+        if (activeGroupId === groupId) {
+            activeGroupId = "hub";
+            activeChannelId = "general";
+            document.getElementById("messages").innerHTML = "";
+            document.getElementById("channel-title").textContent = "general";
+            document.getElementById("message-input").placeholder = "Message #general";
+            document.getElementById("active-group-name").textContent = "Nimbus";
+            lastMsgSender = null;
+            lastMsgTimestamp = 0;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "SwitchGroup", group_id: "hub" }));
+            }
+            notifyViewChannel();
+        }
+        renderServerRail();
+        renderChannels();
+        updateViewerDisplay();
+    }
+
+    function applyUserRenamed(oldName, newName) {
+        if (!oldName || !newName || oldName === newName) return;
+        for (const gid of Object.keys(groups)) {
+            const g = groups[gid];
+            if (g.members) g.members = g.members.map(m => m === oldName ? newName : m);
+            if (g.owner === oldName) g.owner = newName;
+            if (g.close_votes) g.close_votes = g.close_votes.map(v => v === oldName ? newName : v);
+        }
+        for (const key of Object.keys(memberModStates)) {
+            const suffix = ":" + oldName;
+            if (key.endsWith(suffix)) {
+                memberModStates[key.slice(0, -suffix.length) + ":" + newName] = memberModStates[key];
+                delete memberModStates[key];
+            }
+        }
+        if (roomMembers[oldName] !== undefined) {
+            roomMembers[newName] = roomMembers[oldName];
+            delete roomMembers[oldName];
+        }
+        document.querySelectorAll(".username").forEach(el => {
+            if (el.textContent === oldName) el.textContent = newName;
+        });
+        document.querySelectorAll(".vc-user").forEach(el => {
+            if (el.textContent.trim().startsWith(oldName)) el.childNodes[0].textContent = newName;
+        });
+        renderServerRail();
+        renderChannels();
+        updateViewerDisplay();
     }
 
     const rtcConfig = {
@@ -1677,6 +1722,18 @@
                 case "GroupDeleted":
                     handleGroupDeleted(event.group_id);
                     break;
+                case "UserRenamed":
+                    applyUserRenamed(event.old_username, event.new_username);
+                    break;
+                case "MessagesCleared":
+                    if (event.group_id === activeGroupId) {
+                        if (!event.channel_id || event.channel_id === activeChannelId) {
+                            document.getElementById("messages").innerHTML = "";
+                            lastMsgSender = null;
+                            lastMsgTimestamp = 0;
+                        }
+                    }
+                    break;
                 case "ChannelViewers":
                     channelViewers[`${event.group_id}:${event.channel_id}`] = event.count;
                     updateChannelMembers(event);
@@ -1718,8 +1775,8 @@
                     _xNavigate(event);
                     break;
                 case "UsernameChanged":
-                    if (event.username !== myUsername) break;
                     myUsername = event.username;
+                    localStorage.setItem("rc_username", myUsername);
                     document.getElementById("panel-username").textContent = myUsername;
                     document.getElementById("panel-avatar").textContent = myUsername.charAt(0).toUpperCase();
                     break;
