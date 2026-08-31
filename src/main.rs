@@ -133,6 +133,18 @@ enum ServerEvent {
         votes: Vec<String>,
         required: usize,
     },
+    KickedFromGroup {
+        username: String,
+        group_id: String,
+        group_name: String,
+    },
+    ModUpdate {
+        username: String,
+        group_id: String,
+        force_muted: bool,
+        force_deafened: bool,
+        timeout_until: u64,
+    },
 }
 
 #[derive(Deserialize)]
@@ -170,6 +182,22 @@ enum ClientEvent {
     Speaking { is_speaking: bool },
     ScreenShareState { sharing: bool },
     DeleteVoiceRoom { room_id: String },
+    KickMember { group_id: String, target: String },
+    ModMute {
+        group_id: String,
+        target: String,
+        enabled: bool,
+    },
+    ModDeafen {
+        group_id: String,
+        target: String,
+        enabled: bool,
+    },
+    ModTimeout {
+        group_id: String,
+        target: String,
+        duration_secs: u64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +221,13 @@ struct ConnState {
     member_of: HashSet<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ModState {
+    force_muted: bool,
+    force_deafened: bool,
+    timeout_until: u64,
+}
+
 struct AppState {
     tx: broadcast::Sender<String>,
     users: Mutex<HashMap<usize, String>>,
@@ -201,6 +236,7 @@ struct AppState {
     voice_states: Mutex<HashMap<String, String>>,
     groups: Mutex<HashMap<String, ChatGroup>>,
     invite_index: Mutex<HashMap<String, String>>,
+    mod_states: Mutex<HashMap<String, HashMap<String, ModState>>>,
     hub_messages: Mutex<HashMap<String, VecDeque<StoredMessage>>>,
     cipher: Aes256Gcm,
 }
@@ -256,6 +292,221 @@ fn send_to_user(state: &AppState, username: &str, event: &ServerEvent) {
     if state.user_conns.lock().unwrap().contains_key(username) {
         broadcast(state, event);
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn is_group_owner(state: &AppState, group_id: &str, username: &str) -> bool {
+    state
+        .groups
+        .lock()
+        .unwrap()
+        .get(group_id)
+        .map(|g| g.owner == username)
+        .unwrap_or(false)
+}
+
+fn mod_state_for(state: &AppState, group_id: &str, username: &str) -> ModState {
+    let now = now_secs();
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .get(group_id)
+        .and_then(|m| m.get(username))
+        .cloned()
+        .filter(|s| s.timeout_until == 0 || s.timeout_until > now)
+        .unwrap_or_default()
+}
+
+fn is_timed_out(state: &AppState, group_id: &str, username: &str) -> bool {
+    mod_state_for(state, group_id, username).timeout_until > now_secs()
+}
+
+fn send_mod_update(state: &AppState, group_id: &str, target: &str) {
+    let ms = mod_state_for(state, group_id, target);
+    let until = if ms.timeout_until > now_secs() {
+        ms.timeout_until
+    } else {
+        0
+    };
+    send_to_user(
+        state,
+        target,
+        &ServerEvent::ModUpdate {
+            username: target.to_string(),
+            group_id: group_id.to_string(),
+            force_muted: ms.force_muted,
+            force_deafened: ms.force_deafened,
+            timeout_until: until,
+        },
+    );
+}
+
+fn send_mod_updates_for_user(state: &AppState, username: &str) {
+    let groups: Vec<String> = state
+        .mod_states
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, users)| users.contains_key(username))
+        .map(|(gid, _)| gid.clone())
+        .collect();
+    for gid in groups {
+        send_mod_update(state, &gid, username);
+    }
+}
+
+fn disconnect_from_group_vc(state: &AppState, username: &str, group_id: &str) {
+    let prefix = format!("{group_id}:");
+    let mut voice = state.voice_states.lock().unwrap();
+    if let Some(room) = voice.get(username) {
+        if room.starts_with(&prefix) {
+            voice.remove(username);
+            drop(voice);
+            broadcast(
+                state,
+                &ServerEvent::VoiceStateUpdate {
+                    username: username.to_string(),
+                    room_id: None,
+                },
+            );
+            return;
+        }
+    }
+}
+
+fn kick_member_from_group(state: &AppState, actor: &str, group_id: &str, target: &str) {
+    if group_id == HUB_ID || !is_group_owner(state, group_id, actor) || target == actor {
+        return;
+    }
+
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get(group_id) else {
+            return;
+        };
+        if g.owner == target {
+            return;
+        }
+        g.name.clone()
+    };
+
+    disconnect_from_group_vc(state, target, group_id);
+
+    if let Some(&conn_id) = state.user_conns.lock().unwrap().get(target) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&conn_id) {
+            if cs.group_id == group_id {
+                cs.group_id = HUB_ID.into();
+                cs.channel_id = "general".into();
+                send_history(state, conn_id, target, HUB_ID, "general");
+            }
+        }
+    }
+
+    send_to_user(
+        state,
+        target,
+        &ServerEvent::KickedFromGroup {
+            username: target.to_string(),
+            group_id: group_id.to_string(),
+            group_name: updated,
+        },
+    );
+}
+
+fn remove_member_from_group(state: &AppState, actor: &str, group_id: &str, target: &str) {
+    if group_id == HUB_ID || !is_group_owner(state, group_id, actor) || target == actor {
+        return;
+    }
+
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        if g.owner == target {
+            return;
+        }
+        g.members.remove(target);
+        g.close_votes.remove(target);
+        group_info(group_id, g)
+    };
+
+    if let Some(&conn_id) = state.user_conns.lock().unwrap().get(target) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&conn_id) {
+            cs.member_of.remove(group_id);
+        }
+    }
+
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .remove(target);
+
+    kick_member_from_group(state, actor, group_id, target);
+    broadcast(state, &ServerEvent::GroupUpdated { group: updated });
+}
+
+fn set_mod_mute(state: &AppState, actor: &str, group_id: &str, target: &str, enabled: bool) {
+    if group_id == HUB_ID || !is_group_owner(state, group_id, actor) || target == actor {
+        return;
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .entry(target.to_string())
+        .or_default()
+        .force_muted = enabled;
+    send_mod_update(state, group_id, target);
+}
+
+fn set_mod_deafen(state: &AppState, actor: &str, group_id: &str, target: &str, enabled: bool) {
+    if group_id == HUB_ID || !is_group_owner(state, group_id, actor) || target == actor {
+        return;
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .entry(target.to_string())
+        .or_default()
+        .force_deafened = enabled;
+    send_mod_update(state, group_id, target);
+}
+
+fn timeout_member(state: &AppState, actor: &str, group_id: &str, target: &str, duration_secs: u64) {
+    if group_id == HUB_ID || duration_secs == 0 || duration_secs > 604_800 {
+        return;
+    }
+    if !is_group_owner(state, group_id, actor) || target == actor {
+        return;
+    }
+
+    {
+        let mut mods = state.mod_states.lock().unwrap();
+        let entry = mods.entry(group_id.to_string()).or_default();
+        let ms = entry.entry(target.to_string()).or_default();
+        ms.timeout_until = now_secs() + duration_secs;
+        ms.force_muted = true;
+        ms.force_deafened = true;
+    }
+
+    kick_member_from_group(state, actor, group_id, target);
+    send_mod_update(state, group_id, target);
 }
 
 fn group_info(id: &str, g: &ChatGroup) -> GroupInfo {
@@ -497,7 +748,7 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
                     .unwrap_or(false)
             }
         }
-        "GroupList" | "InvitePreview" => {
+        "GroupList" | "InvitePreview" | "KickedFromGroup" | "ModUpdate" => {
             val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
         }
         _ => true,
@@ -522,6 +773,7 @@ async fn main() {
         voice_states: Mutex::new(HashMap::new()),
         groups: Mutex::new(HashMap::new()),
         invite_index: Mutex::new(HashMap::new()),
+        mod_states: Mutex::new(HashMap::new()),
         hub_messages: Mutex::new(hub),
         cipher,
     });
@@ -657,7 +909,6 @@ async fn cleanup_conn(state: &AppState, conn_id: usize) {
 
         let mut groups = state.groups.lock().unwrap();
         for g in groups.values_mut() {
-            g.members.remove(&username);
             g.close_votes.remove(&username);
         }
     }
@@ -827,6 +1078,38 @@ async fn handle_client_event(
             }
             broadcast(state, &ServerEvent::DeleteVoiceRoom { room_id });
         }
+        ClientEvent::KickMember { group_id, target } => {
+            if let Some(name) = current_username.clone() {
+                remove_member_from_group(state, &name, &group_id, &target);
+            }
+        }
+        ClientEvent::ModMute {
+            group_id,
+            target,
+            enabled,
+        } => {
+            if let Some(name) = current_username.clone() {
+                set_mod_mute(state, &name, &group_id, &target, enabled);
+            }
+        }
+        ClientEvent::ModDeafen {
+            group_id,
+            target,
+            enabled,
+        } => {
+            if let Some(name) = current_username.clone() {
+                set_mod_deafen(state, &name, &group_id, &target, enabled);
+            }
+        }
+        ClientEvent::ModTimeout {
+            group_id,
+            target,
+            duration_secs,
+        } => {
+            if let Some(name) = current_username.clone() {
+                timeout_member(state, &name, &group_id, &target, duration_secs);
+            }
+        }
     }
 }
 
@@ -865,6 +1148,14 @@ async fn join_user(
 
     let mut member_of = HashSet::new();
     member_of.insert(HUB_ID.to_string());
+    {
+        let groups = state.groups.lock().unwrap();
+        for (id, g) in groups.iter() {
+            if g.members.contains(&clean) {
+                member_of.insert(id.clone());
+            }
+        }
+    }
     state.conn_states.lock().unwrap().insert(
         conn_id,
         ConnState {
@@ -901,6 +1192,7 @@ async fn join_user(
     }
 
     broadcast_channel_viewers(state, HUB_ID, "general");
+    send_mod_updates_for_user(state, &clean);
 }
 
 fn send_group_list(state: &AppState, conn_id: usize, username: &str) {
@@ -990,6 +1282,10 @@ async fn switch_group(
         Some(u) => u.clone(),
         None => return,
     };
+    if group_id != HUB_ID && is_timed_out(state, group_id, &uname) {
+        send_mod_update(state, group_id, &uname);
+        return;
+    }
     {
         let mut cs = state.conn_states.lock().unwrap();
         let Some(c) = cs.get_mut(&conn_id) else {
@@ -1061,6 +1357,11 @@ fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &st
         idx.get(invite_code).cloned()
     };
     let Some(gid) = group_id else { return };
+
+    if is_timed_out(state, &gid, username) {
+        send_mod_update(state, &gid, username);
+        return;
+    }
 
     let updated = {
         let mut groups = state.groups.lock().unwrap();

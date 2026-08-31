@@ -155,49 +155,49 @@
 
         .invite-card {
             margin-top: 4px;
-            max-width: 432px;
+            max-width: 360px;
             border-radius: 8px;
             overflow: hidden;
             background: #2b2d31;
             border: 1px solid rgba(0, 0, 0, 0.24);
         }
         .invite-card-banner {
-            height: 60px;
-            background: linear-gradient(135deg, #1a1b1e 0%, #2b2d31 45%, #1e1f22 100%);
+            height: 32px;
+            background: linear-gradient(135deg, #1a1b1e 0%, #2b2d31 100%);
         }
-        .invite-card-body { padding: 0 16px 16px; }
+        .invite-card-body { padding: 0 12px 10px; }
         .invite-card-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             background: #313338;
-            border: 4px solid #2b2d31;
-            margin-top: -24px;
-            margin-bottom: 8px;
+            border: 3px solid #2b2d31;
+            margin-top: -16px;
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 22px;
+            font-size: 18px;
             font-weight: 700;
             color: #fff;
         }
-        .invite-card-name { font-size: 16px; font-weight: 700; color: #f2f3f5; margin-bottom: 6px; }
-        .invite-card-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
-        .invite-stat { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #b5bac1; font-weight: 500; }
-        .invite-stat .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .invite-card-name { font-size: 15px; font-weight: 700; color: #f2f3f5; margin-bottom: 4px; }
+        .invite-card-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 2px; }
+        .invite-stat { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #b5bac1; font-weight: 500; }
+        .invite-stat .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
         .invite-stat .dot.green { background: #23a559; }
         .invite-stat .dot.grey { background: #80848e; }
-        .invite-card-est { font-size: 12px; color: #949ba4; margin-top: 2px; }
+        .invite-card-est { font-size: 11px; color: #949ba4; }
         .invite-card-join {
             width: 100%;
-            margin-top: 14px;
-            padding: 10px 16px;
+            margin-top: 10px;
+            padding: 8px 12px;
             background: #248046;
             color: #fff;
             border: none;
             border-radius: 4px;
             font-weight: 600;
-            font-size: 14px;
+            font-size: 13px;
             cursor: pointer;
         }
         .invite-card-join:hover { background: #1a6334; }
@@ -222,6 +222,17 @@
         .member-avatar { width: 32px; height: 32px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
         .member-avatar .status-dot { position: absolute; bottom: -2px; right: -2px; width: 12px; height: 12px; background: #23a559; border: 3px solid #2b2d31; border-radius: 50%; }
         .member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .member-crown { color: #faa61a; font-size: 13px; margin-left: 2px; flex-shrink: 0; }
+        .member-item.mod-target { cursor: pointer; }
+        .member-item.mod-target:hover { background: #35373c; }
+        .mod-menu { display: none; position: fixed; z-index: 300; background: #111214; border-radius: 8px; padding: 6px; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); border: 1px solid #1f2023; }
+        .mod-menu.visible { display: block; }
+        .mod-menu-title { padding: 8px 10px 6px; font-size: 12px; font-weight: 700; color: #949ba4; text-transform: uppercase; }
+        .mod-menu button { display: block; width: 100%; text-align: left; padding: 8px 10px; background: transparent; border: none; color: #dbdee1; font-size: 14px; border-radius: 4px; cursor: pointer; }
+        .mod-menu button:hover { background: #5865f2; color: #fff; }
+        .mod-menu button.danger { color: #f23f43; }
+        .mod-menu button.danger:hover { background: #da373c; color: #fff; }
+        .mod-menu hr { border: none; border-top: 1px solid #1f2023; margin: 4px 0; }
         .invite-btn { display: none; padding: 4px 8px; background: #5865f2; color: white; border: none; border-radius: 3px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
         .member-item:hover .invite-btn { display: block; }
         .invite-btn:hover { background: #4752c4; }
@@ -482,6 +493,18 @@
     <div id="channel-member-items"></div>
 </div>
 
+<div id="mod-menu" class="mod-menu">
+    <div class="mod-menu-title" id="mod-menu-title">Moderate</div>
+    <button onclick="modAction('kick')">Remove from Room</button>
+    <hr />
+    <button onclick="modAction('mute')">Force Mute</button>
+    <button onclick="modAction('unmute')">Remove Force Mute</button>
+    <button onclick="modAction('deafen')">Force Deafen</button>
+    <button onclick="modAction('undeafen')">Remove Force Deafen</button>
+    <hr />
+    <button onclick="modAction('timeout')">Timeout...</button>
+</div>
+
 <script>
     let ws;
     let myUsername = "";
@@ -519,6 +542,11 @@
     let invitePreviews = {};
     let closeVoteRequired = 0;
     let closeVoteCount = 0;
+    let forceMuted = false;
+    let forceDeafened = false;
+    let timeoutUntil = 0;
+    let modTargetUser = null;
+    let memberModStates = {};
 
     function vcRoomId(groupId, channelId) { return `${groupId}:${channelId}`; }
 
@@ -568,7 +596,7 @@
         const stats = p && p.valid
             ? `<div class="invite-card-stats"><span class="invite-stat online"><span class="dot green"></span>${online} Online</span><span class="invite-stat"><span class="dot grey"></span>${members} Member${members !== 1 ? "s" : ""}</span></div>${est ? `<div class="invite-card-est">${escapeHtml(est)}</div>` : ""}`
             : (p && !p.valid ? `<div class="invite-card-est">This invite may have expired</div>` : "");
-        return `<div class="invite-card${invalidClass}" data-invite="${escapeHtml(code)}"><div class="invite-card-banner"></div><div class="invite-card-body"><div class="invite-card-icon">${escapeHtml(icon)}</div><div class="invite-card-name">${escapeHtml(name)}</div>${stats}<button type="button" class="invite-card-join${disabled}" data-invite="${escapeHtml(code)}">Go to Server</button></div></div>`;
+        return `<div class="invite-card${invalidClass}" data-invite="${escapeHtml(code)}"><div class="invite-card-banner"></div><div class="invite-card-body"><div class="invite-card-icon">${escapeHtml(icon)}</div><div class="invite-card-name">${escapeHtml(name)}</div>${stats}<button type="button" class="invite-card-join${disabled}" data-invite="${escapeHtml(code)}">Go to Room</button></div></div>`;
     }
 
     function refreshInviteCards() {
@@ -677,11 +705,16 @@
     }
 
     function switchGroup(groupId) {
+        if (groupId !== "hub" && isTimedOut(groupId)) {
+            alert("You are timed out from this room.");
+            return;
+        }
         if (currentRoom && !currentRoom.startsWith(groupId + ":") && !currentRoom.startsWith("priv-")) {
             leaveVoiceChannel(true);
         }
         activeGroupId = groupId;
         activeChannelId = "general";
+        localStorage.setItem("rc_active_group", groupId);
         document.getElementById("messages").innerHTML = "";
         lastMsgSender = null;
         lastMsgTimestamp = 0;
@@ -763,15 +796,111 @@
         groups = {};
         list.forEach(g => { if (g.id !== "hub") groups[g.id] = g; });
         renderServerRail();
-        renderChannels();
         if (pendingGroupInvite) {
             joinGroupFromInvite(pendingGroupInvite);
             pendingGroupInvite = null;
+            return;
+        }
+        const savedGroup = localStorage.getItem("rc_active_group");
+        if (savedGroup && (savedGroup === "hub" || groups[savedGroup])) {
+            if (activeGroupId !== savedGroup) switchGroup(savedGroup);
+            else renderChannels();
+        } else {
+            renderChannels();
         }
     }
 
+    function isTimedOut(groupId) {
+        if (groupId === "hub") return false;
+        const key = `${groupId}:${myUsername}`;
+        const until = memberModStates[key]?.timeout_until || timeoutUntil;
+        return until > Math.floor(Date.now() / 1000);
+    }
+
+    function applyModState(data) {
+        if (data.group_id !== activeGroupId && data.timeout_until) {
+            const key = `${data.group_id}:${myUsername}`;
+            memberModStates[key] = data;
+        }
+        if (data.username !== myUsername) return;
+
+        forceMuted = data.force_muted;
+        forceDeafened = data.force_deafened;
+        timeoutUntil = data.timeout_until || 0;
+
+        syncLocalAudioState();
+        syncRemoteAudioState();
+
+        const now = Math.floor(Date.now() / 1000);
+        if (timeoutUntil > now && data.group_id === activeGroupId) {
+            alert(`You have been timed out from this room until ${new Date(timeoutUntil * 1000).toLocaleString()}.`);
+            switchGroup("hub");
+        }
+    }
+
+    function syncLocalAudioState() {
+        if (!localStream) return;
+        localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted && !forceMuted; });
+        if (forceMuted) {
+            setSpeakingVisual(myUsername, false);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
+            }
+            lastSpeakingSent = false;
+        }
+    }
+
+    function syncRemoteAudioState() {
+        document.querySelectorAll("#remote-audio-container audio").forEach(a => {
+            a.muted = isDeafened || forceDeafened;
+        });
+    }
+
+    function openMemberMenu(e, username) {
+        const g = getActiveGroup();
+        if (activeGroupId === "hub" || g.owner !== myUsername || username === myUsername) return;
+        e.stopPropagation();
+        modTargetUser = username;
+        document.getElementById("mod-menu-title").textContent = username;
+        const menu = document.getElementById("mod-menu");
+        menu.style.left = Math.min(e.clientX, window.innerWidth - 220) + "px";
+        menu.style.top = Math.min(e.clientY, window.innerHeight - 280) + "px";
+        menu.classList.add("visible");
+    }
+
+    function hideModMenu() {
+        document.getElementById("mod-menu").classList.remove("visible");
+        modTargetUser = null;
+    }
+
+    function modAction(action) {
+        if (!modTargetUser || !ws || activeGroupId === "hub") return;
+        const target = modTargetUser;
+        hideModMenu();
+        if (action === "kick") {
+            if (confirm(`Remove ${target} from this room?`)) {
+                ws.send(JSON.stringify({ type: "KickMember", group_id: activeGroupId, target }));
+            }
+            return;
+        }
+        if (action === "mute") ws.send(JSON.stringify({ type: "ModMute", group_id: activeGroupId, target, enabled: true }));
+        if (action === "unmute") ws.send(JSON.stringify({ type: "ModMute", group_id: activeGroupId, target, enabled: false }));
+        if (action === "deafen") ws.send(JSON.stringify({ type: "ModDeafen", group_id: activeGroupId, target, enabled: true }));
+        if (action === "undeafen") ws.send(JSON.stringify({ type: "ModDeafen", group_id: activeGroupId, target, enabled: false }));
+        if (action === "timeout") {
+            const raw = prompt("Timeout duration in minutes:", "10");
+            if (!raw) return;
+            const mins = parseInt(raw, 10);
+            if (!mins || mins < 1) return;
+            ws.send(JSON.stringify({ type: "ModTimeout", group_id: activeGroupId, target, duration_secs: mins * 60 }));
+        }
+    }
+
+    document.addEventListener("click", () => hideModMenu());
+
     function handleGroupDeleted(groupId) {
         delete groups[groupId];
+        if (localStorage.getItem("rc_active_group") === groupId) localStorage.setItem("rc_active_group", "hub");
         if (currentRoom && currentRoom.startsWith(groupId + ":")) leaveVoiceChannel(true);
         if (activeGroupId === groupId) switchGroup("hub");
         else renderServerRail();
@@ -792,9 +921,13 @@
     };
 
     const screenShareEncoding = {
-        maxBitrate: 20_000_000,
+        maxBitrate: 10_000_000,
         maxFramerate: 60,
         scaleResolutionDownBy: 1
+    };
+
+    const audioEncoding = {
+        maxBitrate: 128_000
     };
 
     DOMPurify.setConfig({
@@ -866,6 +999,8 @@
             const btn = e.target.closest(".invite-card-join");
             if (btn && !btn.disabled) joinGroupFromInvite(btn.dataset.invite);
         });
+
+        document.getElementById("mod-menu").addEventListener("click", (e) => e.stopPropagation());
 
         if (savedUser) attemptJoin();
 
@@ -1012,6 +1147,15 @@
                         document.getElementById("close-vote-text").textContent = `${closeVoteCount}/${closeVoteRequired} voted to close`;
                     }
                     break;
+                case "KickedFromGroup":
+                    if (event.username !== myUsername) break;
+                    if (currentRoom && currentRoom.startsWith(event.group_id + ":")) leaveVoiceChannel(true);
+                    if (activeGroupId === event.group_id) switchGroup("hub");
+                    alert(`You were removed from ${event.group_name}.`);
+                    break;
+                case "ModUpdate":
+                    applyModState(event);
+                    break;
             }
         };
 
@@ -1085,7 +1229,13 @@
 
     function renderMemberCard(u) {
         const initial = u.charAt(0).toUpperCase();
-        return `<div class="member-item"><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span></div>`;
+        const g = getActiveGroup();
+        const isOwner = g && g.owner === u;
+        const crown = isOwner ? '<span class="member-crown" title="Room owner">👑</span>' : "";
+        const canMod = activeGroupId !== "hub" && g.owner === myUsername && u !== myUsername;
+        const modClass = canMod ? " mod-target" : "";
+        const click = canMod ? ` onclick="openMemberMenu(event, ${JSON.stringify(u)})"` : "";
+        return `<div class="member-item${modClass}"${click}><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span>${crown}</div>`;
     }
 
     function updateChannelMembers(data) {
@@ -1173,7 +1323,13 @@
 
         try {
             localStream = await navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: { ideal: 48000 },
+                    channelCount: { ideal: 1 }
+                },
                 video: false
             });
             setupLocalAnalyzer(localStream);
@@ -1297,7 +1453,7 @@
         if (speakingInterval) clearInterval(speakingInterval);
         lastSpeakingSent = false;
         speakingInterval = setInterval(() => {
-            if (!localAnalyzer || isMuted) {
+            if (!localAnalyzer || isMuted || forceMuted) {
                 if (lastSpeakingSent) {
                     lastSpeakingSent = false;
                     setSpeakingVisual(myUsername, false);
@@ -1349,7 +1505,7 @@
         stream.getAudioTracks().forEach(t => stream.removeTrack(t));
         stream.addTrack(track);
         audioEl.srcObject = stream;
-        audioEl.muted = isDeafened;
+        audioEl.muted = isDeafened || forceDeafened;
         audioEl.play().catch(() => {});
         track.onunmute = () => audioEl.play().catch(() => {});
     }
@@ -1461,6 +1617,20 @@
         }
     }
 
+    async function applyAudioEncoding(sender) {
+        if (!sender) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+            params.encodings[0].maxBitrate = audioEncoding.maxBitrate;
+            params.encodings[0].priority = "high";
+            params.degradationPreference = "maintain-framerate";
+            await sender.setParameters(params);
+        } catch (e) {
+            console.warn("Could not set audio encoding:", e);
+        }
+    }
+
     async function applyScreenShareEncoding(sender) {
         if (!sender) return;
         try {
@@ -1492,6 +1662,10 @@
             await pc.setLocalDescription(await pc.createOffer());
             sendVoiceSignal(targetUser, { sdp: pc.localDescription });
             if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
+            else {
+                const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+                if (audioSender) await applyAudioEncoding(audioSender);
+            }
         } catch (err) {
             console.error("Renegotiate error:", err);
         } finally {
@@ -1528,6 +1702,10 @@
                 await pc.setLocalDescription();
                 sendVoiceSignal(targetUser, { sdp: pc.localDescription });
                 if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
+                else {
+                    const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+                    if (audioSender) await applyAudioEncoding(audioSender);
+                }
             } catch (err) {
                 console.error("Negotiation error:", err);
             } finally {
@@ -1544,7 +1722,10 @@
             const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
             if (localStream) {
                 const audioTrack = localStream.getAudioTracks()[0];
-                if (audioTrack) await audioTransceiver.sender.replaceTrack(audioTrack);
+                if (audioTrack) {
+                    await audioTransceiver.sender.replaceTrack(audioTrack);
+                    await applyAudioEncoding(audioTransceiver.sender);
+                }
             }
 
             videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "inactive" });
@@ -1620,23 +1801,18 @@
     }
 
     function toggleMute() {
+        if (forceMuted) return;
         isMuted = !isMuted;
-        if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
-        document.getElementById("btn-mute").classList.toggle("active", isMuted);
-        if (isMuted) {
-            setSpeakingVisual(myUsername, false);
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
-            }
-            lastSpeakingSent = false;
-        }
+        syncLocalAudioState();
+        document.getElementById("btn-mute").classList.toggle("active", isMuted || forceMuted);
     }
 
     function toggleDeafen() {
+        if (forceDeafened) return;
         isDeafened = !isDeafened;
-        document.querySelectorAll("#remote-audio-container audio").forEach(a => { a.muted = isDeafened; });
-        document.getElementById("btn-deaf").classList.toggle("active", isDeafened);
-        if (isDeafened && !isMuted) toggleMute();
+        syncRemoteAudioState();
+        document.getElementById("btn-deaf").classList.toggle("active", isDeafened || forceDeafened);
+        if (isDeafened && !isMuted && !forceMuted) toggleMute();
     }
 
     // --- Screen share ---
