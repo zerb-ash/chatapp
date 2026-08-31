@@ -28,9 +28,9 @@ enum ServerEvent {
     Message { username: String, ciphertext: String, iv: String, timestamp: u64 },
     UserList { users: Vec<String> },
     Typing { username: String, is_typing: bool },
-    // Voice & Signaling
     VoiceSignal { from: String, target: String, signal: serde_json::Value },
     VoiceInvite { from: String, room_id: String },
+    VoiceStateUpdate { username: String, room_id: Option<String> },
 }
 
 #[derive(Deserialize)]
@@ -41,11 +41,13 @@ enum ClientEvent {
     Typing { is_typing: bool },
     VoiceSignal { target: String, signal: serde_json::Value },
     VoiceInvite { target: String, room_id: String },
+    VoiceStateUpdate { room_id: Option<String> },
 }
 
 struct AppState {
     tx: broadcast::Sender<String>,
     users: Mutex<HashMap<usize, String>>,
+    voice_states: Mutex<HashMap<String, String>>,
     messages: Mutex<VecDeque<EncryptedMessage>>,
 }
 
@@ -55,10 +57,10 @@ async fn main() {
     let state = Arc::new(AppState {
         tx,
         users: Mutex::new(HashMap::new()),
+        voice_states: Mutex::new(HashMap::new()),
         messages: Mutex::new(VecDeque::new()),
     });
 
-    // Cleanup task: purges stored messages older than 24 hours
     let state_cleanup = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -101,19 +103,23 @@ async fn index() -> Html<&'static str> {
             #sidebar { width: 260px; background: #2b2d31; display: flex; flex-direction: column; border-right: 1px solid #1f2023; }
             .sidebar-header { padding: 16px; font-weight: bold; color: #f2f5f7; border-bottom: 1px solid #1f2023; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
             
-            /* Voice Channels */
             .vc-section { padding: 12px 8px; border-bottom: 1px solid #1f2023; }
             .vc-title { font-size: 11px; font-weight: bold; color: #949ba4; text-transform: uppercase; margin-bottom: 8px; padding-left: 8px; }
             .vc-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 4px; color: #949ba4; cursor: pointer; font-size: 14px; }
             .vc-item:hover { background: #35373c; color: #dbdee1; }
             .vc-item.active { background: #404249; color: #fff; }
             
+            .vc-roster { list-style: none; padding-left: 20px; margin-top: 4px; margin-bottom: 8px; }
+            .vc-user { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 13px; color: #949ba4; border-radius: 4px; }
+            .vc-user-avatar { width: 24px; height: 24px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; border: 2px solid transparent; transition: border-color 0.15s ease; }
+            .vc-user-avatar.speaking { border-color: #23a55a !important; box-shadow: 0 0 6px rgba(35, 165, 90, 0.8); }
+
             .vc-controls { display: flex; gap: 6px; padding: 10px; background: #232428; border-top: 1px solid #1f2023; }
             .vc-btn { flex: 1; padding: 8px 4px; background: #313338; border: none; border-radius: 4px; color: #dbdee1; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
-            .vc-btn:hover { background: #383a40; }
+            .vc-btn:hover:not(:disabled) { background: #383a40; }
             .vc-btn.active { background: #da373c; color: #fff; }
+            .vc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-            /* User List */
             #user-list { list-style: none; padding: 10px; overflow-y: auto; flex: 1; }
             #user-list li { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 4px; font-size: 14px; color: #949ba4; position: relative; }
             #user-list li:hover { background: #35373c; color: #dbdee1; }
@@ -127,7 +133,6 @@ async fn index() -> Html<&'static str> {
             .chat-header { padding: 16px; background: #313338; border-bottom: 1px solid #1f2023; font-weight: bold; color: #f2f5f7; display: flex; justify-content: space-between; align-items: center; }
             #messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
 
-            /* Discord Message Grouping Format */
             .msg-group { display: flex; gap: 16px; margin-top: 16px; width: 100%; }
             .msg-group.grouped { margin-top: 2px; }
             .avatar-col { width: 40px; display: flex; justify-content: center; flex-shrink: 0; }
@@ -141,20 +146,26 @@ async fn index() -> Html<&'static str> {
             .timestamp { font-size: 11px; color: #949ba4; }
             .body { color: #dbdee1; font-size: 14px; line-height: 1.4; word-break: break-word; }
 
-            .body img, .body video { max-width: 400px; max-height: 300px; border-radius: 8px; margin-top: 8px; display: block; }
+            .body img, .body video { max-width: 400px; max-height: 300px; border-radius: 8px; margin-top: 8px; display: block; object-fit: contain; }
             .body a { color: #00a8fc; text-decoration: none; }
             .body code { background: #2b2d31; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
 
-            /* Screen Share Grid */
             #video-grid { display: none; height: 260px; background: #111214; padding: 10px; gap: 10px; overflow-x: auto; border-bottom: 1px solid #1f2023; }
             #video-grid video { height: 100%; border-radius: 6px; background: #000; object-fit: contain; }
 
             .input-container { padding: 0 20px 20px 20px; position: relative; }
+            
+            /* Image Preview Drawer inside Input Area */
+            #image-preview-container { display: none; background: #2b2d31; padding: 8px 12px; border-radius: 8px 8px 0 0; border-bottom: 1px solid #383a40; align-items: center; gap: 12px; }
+            #image-preview { height: 60px; max-width: 120px; border-radius: 4px; object-fit: cover; border: 1px solid #404249; }
+            .remove-img-btn { background: #da373c; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+            .remove-img-btn:hover { background: #a1282b; }
+
             .input-box { background: #383a40; border-radius: 8px; display: flex; align-items: center; padding: 0 16px; }
+            .input-box.has-preview { border-top-left-radius: 0; border-top-right-radius: 0; }
             #message-input { width: 100%; background: transparent; border: none; padding: 14px 0; color: #dbdee1; font-size: 14px; outline: none; }
             #typing-indicator { position: absolute; top: -20px; left: 24px; font-size: 12px; color: #b5bac1; font-style: italic; min-height: 16px; }
 
-            /* Modals & Notifications */
             #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
             .modal-box { background: #313338; padding: 32px; border-radius: 8px; width: 360px; text-align: center; }
             .modal-box h3 { color: #f2f5f7; margin-bottom: 8px; }
@@ -205,11 +216,13 @@ async fn index() -> Html<&'static str> {
                 <div class="vc-title">Voice Channels</div>
                 <div id="vc-general" class="vc-item" onclick="toggleVoiceChannel('general')">
                     <span>🔊 General VC</span>
-                    <span id="vc-general-count" style="font-size:11px;"></span>
                 </div>
-                <div id="vc-private" class="vc-item" style="display:none;" onclick="toggleVoiceChannel('private')">
+                <ul id="roster-general" class="vc-roster"></ul>
+
+                <div id="vc-private" class="vc-item" style="display:none;" onclick="toggleVoiceChannel(currentRoom)">
                     <span>🔒 Private Call</span>
                 </div>
+                <ul id="roster-private" class="vc-roster" style="display:none;"></ul>
             </div>
 
             <div class="sidebar-header" style="border-top: 1px solid #1f2023;">Online Users — <span id="user-count">0</span></div>
@@ -218,7 +231,7 @@ async fn index() -> Html<&'static str> {
             <div class="vc-controls">
                 <button id="btn-mute" class="vc-btn" onclick="toggleMute()">🎙️ Mute</button>
                 <button id="btn-deaf" class="vc-btn" onclick="toggleDeafen()">🎧 Deafen</button>
-                <button id="btn-screen" class="vc-btn" onclick="toggleScreenShare()">🖥️ Share</button>
+                <button id="btn-screen" class="vc-btn" onclick="toggleScreenShare()" disabled title="Screen sharing only allowed in private VCs">🖥️ Share</button>
             </div>
         </div>
 
@@ -232,7 +245,15 @@ async fn index() -> Html<&'static str> {
 
             <div class="input-container">
                 <div id="typing-indicator"></div>
-                <div class="input-box">
+                
+                <!-- Image Clipboard Attachment Preview -->
+                <div id="image-preview-container">
+                    <img id="image-preview" src="" alt="Pasted Image Preview" />
+                    <button class="remove-img-btn" onclick="clearPastedImage()" title="Remove attached image">✕</button>
+                    <span style="font-size: 12px; color: #949ba4;">Image attached from clipboard</span>
+                </div>
+
+                <div id="input-box-wrapper" class="input-box">
                     <input id="message-input" type="text" placeholder="Message #general..." disabled />
                 </div>
             </div>
@@ -244,23 +265,32 @@ async fn index() -> Html<&'static str> {
             let cryptoKey = null;
             let activeTypers = new Set();
             let typingTimeout = null;
+            let pastedImageDataUrl = null;
 
-            // Message Grouping State Tracking
+            // Message Grouping State
             let lastMsgSender = null;
             let lastMsgTimestamp = 0;
 
-            // WebRTC State
+            // WebRTC & Audio State
             let currentRoom = null;
             let localStream = null;
             let localScreenStream = null;
-            let peerConnections = {}; // targetUser -> RTCPeerConnection
+            let peerConnections = {};
+            let roomMembers = {};
+            let audioAnalyzers = {};
+            let audioInterval = null;
             let pendingInviteRoom = null;
             let isMuted = false;
             let isDeafened = false;
 
-            const rtcConfig = {
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            };
+            const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+            // Configure DOMPurify strict defense rules
+            DOMPurify.setConfig({
+                ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'code', 'pre', 'br', 'p', 'span', 'img', 'video', 'ul', 'ol', 'li'],
+                ALLOWED_ATTR: ['href', 'src', 'controls', 'class', 'alt', 'loading', 'target', 'rel'],
+                ALLOW_DATA_ATTR: false
+            });
 
             window.addEventListener('DOMContentLoaded', () => {
                 const savedUser = localStorage.getItem('rc_username');
@@ -268,7 +298,6 @@ async fn index() -> Html<&'static str> {
                 if (savedUser) document.getElementById('username-input').value = savedUser;
                 if (savedKey) document.getElementById('room-key').value = savedKey;
 
-                // Auto-join private room if invited via URL hash
                 const hash = window.location.hash;
                 if (hash.startsWith('#room=')) {
                     pendingInviteRoom = hash.replace('#room=', '');
@@ -277,7 +306,49 @@ async fn index() -> Html<&'static str> {
                 if (savedUser && savedKey) {
                     attemptJoin();
                 }
+
+                // Setup Clipboard Paste Handler
+                document.getElementById('message-input').addEventListener('paste', handleClipboardPaste);
             });
+
+            /* --- CLIPBOARD PASTE IMAGE HANDLING --- */
+            function handleClipboardPaste(e) {
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+                for (let item of items) {
+                    if (item.type.indexOf('image') === 0) {
+                        e.preventDefault();
+                        const blob = item.getAsFile();
+                        const reader = new FileReader();
+                        reader.onload = function(event) {
+                            pastedImageDataUrl = event.target.result;
+                            showImagePreview(pastedImageDataUrl);
+                        };
+                        reader.readAsDataURL(blob);
+                        break;
+                    }
+                }
+            }
+
+            function showImagePreview(dataUrl) {
+                const container = document.getElementById('image-preview-container');
+                const img = document.getElementById('image-preview');
+                const boxWrapper = document.getElementById('input-box-wrapper');
+                
+                img.src = dataUrl;
+                container.style.display = 'flex';
+                boxWrapper.classList.add('has-preview');
+            }
+
+            function clearPastedImage() {
+                pastedImageDataUrl = null;
+                const container = document.getElementById('image-preview-container');
+                const img = document.getElementById('image-preview');
+                const boxWrapper = document.getElementById('input-box-wrapper');
+
+                img.src = "";
+                container.style.display = 'none';
+                boxWrapper.classList.remove('has-preview');
+            }
 
             async function attemptJoin() {
                 const userVal = document.getElementById('username-input').value.trim();
@@ -351,6 +422,9 @@ async fn index() -> Html<&'static str> {
                     else if (event.type === 'VoiceInvite') {
                         showInviteToast(event.from, event.room_id);
                     }
+                    else if (event.type === 'VoiceStateUpdate') {
+                        handleVoiceStateUpdate(event.username, event.room_id);
+                    }
                 };
             }
 
@@ -387,7 +461,12 @@ async fn index() -> Html<&'static str> {
 
             async function send() {
                 const input = document.getElementById('message-input');
-                const rawText = input.value.trim();
+                let rawText = input.value.trim();
+
+                if (pastedImageDataUrl) {
+                    rawText += (rawText ? "\n" : "") + `![Attached Image](${pastedImageDataUrl})`;
+                }
+
                 if (!rawText || !ws) return;
 
                 notifyTyping(false);
@@ -397,57 +476,60 @@ async fn index() -> Html<&'static str> {
                     ciphertext: encrypted.ciphertext,
                     iv: encrypted.iv
                 }));
+
                 input.value = '';
+                clearPastedImage();
             }
 
-            /* --- DISCORD-STYLE MESSAGE GROUPING ENGINE --- */
+            /* --- STRICT SANITIZATION ENGINE --- */
             async function renderMessage(msg) {
                 const box = document.getElementById('messages');
-                const plaintext = await decryptText(msg.ciphertext, msg.iv);
+                const rawPlaintext = await decryptText(msg.ciphertext, msg.iv);
                 const sender = msg.username || 'Anonymous';
                 const initial = sender.charAt(0).toUpperCase();
 
-                let parsedBody = DOMPurify.sanitize(marked.parse(plaintext));
-                parsedBody = parsedBody.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
-                parsedBody = parsedBody.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
+                // 1. STAGE 1: Pure HTML Escaping (Neutralizes ALL injected <script>, <b>, <img>, <iframe> tags completely)
+                let safeText = escapeHtml(rawPlaintext);
+
+                // 2. STAGE 2: Markdown Parsing on Safely Escaped Text
+                let parsedHTML = marked.parse(safeText);
+
+                // 3. STAGE 3: Auto Embed Clean Image/Video Link URLs
+                parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
+                parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
+
+                // Restore Data URI pasted images generated by local markdown
+                parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
+
+                // 4. STAGE 4: Final DOMPurify Sanitization Guard (Eliminates residual XSS vector payloads)
+                const cleanBody = DOMPurify.sanitize(parsedHTML);
 
                 const msgDate = new Date(msg.timestamp * 1000);
                 const timeStr = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-                // Group if same user sends within 5 minutes (300 seconds)
                 const isGrouped = (sender === lastMsgSender) && ((msg.timestamp - lastMsgTimestamp) < 300);
 
                 lastMsgSender = sender;
                 lastMsgTimestamp = msg.timestamp;
 
                 if (isGrouped) {
-                    const card = `
+                    box.innerHTML += `
                         <div class="msg-group grouped">
-                            <div class="avatar-col">
-                                <span class="hover-time">${timeStr}</span>
-                            </div>
-                            <div class="msg-content">
-                                <div class="body">${parsedBody}</div>
-                            </div>
-                        </div>
-                    `;
-                    box.innerHTML += card;
+                            <div class="avatar-col"><span class="hover-time">${timeStr}</span></div>
+                            <div class="msg-content"><div class="body">${cleanBody}</div></div>
+                        </div>`;
                 } else {
-                    const card = `
+                    box.innerHTML += `
                         <div class="msg-group">
-                            <div class="avatar-col">
-                                <div class="avatar">${initial}</div>
-                            </div>
+                            <div class="avatar-col"><div class="avatar">${initial}</div></div>
                             <div class="msg-content">
                                 <div class="msg-header">
                                     <span class="username">${escapeHtml(sender)}</span>
                                     <span class="timestamp">${timeStr}</span>
                                 </div>
-                                <div class="body">${parsedBody}</div>
+                                <div class="body">${cleanBody}</div>
                             </div>
-                        </div>
-                    `;
-                    box.innerHTML += card;
+                        </div>`;
                 }
 
                 box.scrollTop = box.scrollHeight;
@@ -472,13 +554,12 @@ async fn index() -> Html<&'static str> {
                 });
             }
 
-            /* --- WEBRTC VOICE & SCREENSHARE ENGINE --- */
+            /* --- VOICE CHANNEL & ROSTER --- */
             async function toggleVoiceChannel(roomName) {
                 if (currentRoom === roomName) {
                     leaveVoiceChannel();
                     return;
                 }
-
                 if (currentRoom) leaveVoiceChannel();
                 await joinVoiceRoom(roomName);
             }
@@ -487,45 +568,67 @@ async fn index() -> Html<&'static str> {
                 currentRoom = roomName;
                 document.getElementById('vc-general').classList.toggle('active', roomName === 'general');
                 
+                const privItem = document.getElementById('vc-private');
+                const privRoster = document.getElementById('roster-private');
+                const screenBtn = document.getElementById('btn-screen');
+
                 if (roomName !== 'general') {
-                    const privItem = document.getElementById('vc-private');
                     privItem.style.display = 'flex';
                     privItem.classList.add('active');
+                    privRoster.style.display = 'block';
+                    screenBtn.disabled = false;
+                } else {
+                    screenBtn.disabled = true;
                 }
 
                 try {
-                    // Capture User Audio with High-Quality Echo Cancellation & Noise Suppression
                     localStream = await navigator.mediaDevices.getUserMedia({
                         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                         video: false
                     });
+                    setupAudioAnalyzer(myUsername, localStream);
                 } catch (err) {
                     alert("Could not access microphone: " + err.message);
                     return;
                 }
 
-                // Connect with all existing users via WebRTC signaling
-                const users = Array.from(document.querySelectorAll('#user-list li span:nth-child(2)')).map(el => el.innerText);
-                users.forEach(targetUser => {
-                    if (targetUser !== myUsername) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: currentRoom }));
+                }
+
+                Object.keys(roomMembers).forEach(targetUser => {
+                    if (targetUser !== myUsername && roomMembers[targetUser] === currentRoom) {
                         createPeerConnection(targetUser, true);
                     }
                 });
+
+                startSpeakingMonitor();
             }
 
             function leaveVoiceChannel() {
+                if (!currentRoom) return;
+
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: null }));
+                }
+
                 currentRoom = null;
                 document.getElementById('vc-general').classList.remove('active');
                 const privItem = document.getElementById('vc-private');
                 privItem.classList.remove('active');
                 privItem.style.display = 'none';
+                document.getElementById('roster-private').style.display = 'none';
+
+                const screenBtn = document.getElementById('btn-screen');
+                screenBtn.disabled = true;
+                screenBtn.classList.remove('active');
 
                 if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
+                    localStream.getTracks().forEach(t => t.stop());
                     localStream = null;
                 }
                 if (localScreenStream) {
-                    localScreenStream.getTracks().forEach(track => track.stop());
+                    localScreenStream.getTracks().forEach(t => t.stop());
                     localScreenStream = null;
                     document.getElementById('video-grid').style.display = 'none';
                 }
@@ -534,16 +637,88 @@ async fn index() -> Html<&'static str> {
                     peerConnections[target].close();
                     delete peerConnections[target];
                 });
+
                 document.getElementById('remote-audio-container').innerHTML = '';
+                stopSpeakingMonitor();
+                renderVCRosters();
             }
 
+            function handleVoiceStateUpdate(username, roomId) {
+                if (roomId) roomMembers[username] = roomId;
+                else delete roomMembers[username];
+                renderVCRosters();
+            }
+
+            function renderVCRosters() {
+                const genRoster = document.getElementById('roster-general');
+                const privRoster = document.getElementById('roster-private');
+                genRoster.innerHTML = '';
+                privRoster.innerHTML = '';
+
+                Object.keys(roomMembers).forEach(user => {
+                    const room = roomMembers[user];
+                    const initial = user.charAt(0).toUpperCase();
+                    const li = document.createElement('li');
+                    li.className = 'vc-user';
+                    li.id = `vc-user-${user}`;
+                    li.innerHTML = `
+                        <div class="vc-user-avatar" id="avatar-${user}">${initial}</div>
+                        <span>${escapeHtml(user)}</span>
+                    `;
+
+                    if (room === 'general') {
+                        genRoster.appendChild(li);
+                    } else if (currentRoom && room === currentRoom) {
+                        privRoster.appendChild(li);
+                    }
+                });
+            }
+
+            /* --- SPEAKING MONITOR --- */
+            function setupAudioAnalyzer(user, stream) {
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const src = ctx.createMediaStreamSource(stream);
+                    const analyzer = ctx.createAnalyser();
+                    analyzer.fftSize = 256;
+                    src.connect(analyzer);
+                    audioAnalyzers[user] = { analyzer, context: ctx };
+                } catch (e) { console.error("Audio Analysis error", e); }
+            }
+
+            function startSpeakingMonitor() {
+                if (audioInterval) clearInterval(audioInterval);
+                audioInterval = setInterval(() => {
+                    Object.keys(audioAnalyzers).forEach(user => {
+                        const { analyzer } = audioAnalyzers[user];
+                        const data = new Uint8Array(analyzer.frequencyBinCount);
+                        analyzer.getByteFrequencyData(data);
+                        
+                        let sum = 0;
+                        for (let i = 0; i < data.length; i++) sum += data[i];
+                        const avg = sum / data.length;
+
+                        const avatar = document.getElementById(`avatar-${user}`);
+                        if (avatar) {
+                            if (avg > 15) avatar.classList.add('speaking');
+                            else avatar.classList.remove('speaking');
+                        }
+                    });
+                }, 100);
+            }
+
+            function stopSpeakingMonitor() {
+                if (audioInterval) clearInterval(audioInterval);
+                audioAnalyzers = {};
+            }
+
+            /* --- WEBRTC RTC PEERS --- */
             function createPeerConnection(targetUser, isInitiator) {
                 if (peerConnections[targetUser]) return peerConnections[targetUser];
 
                 const pc = new RTCPeerConnection(rtcConfig);
                 peerConnections[targetUser] = pc;
 
-                // Add Local Audio Tracks
                 if (localStream) {
                     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
                 }
@@ -551,7 +726,6 @@ async fn index() -> Html<&'static str> {
                     localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                 }
 
-                // Handle Incoming Remote Tracks (Audio & Video)
                 pc.ontrack = (evt) => {
                     if (evt.track.kind === 'audio') {
                         let audioEl = document.getElementById(`audio-${targetUser}`);
@@ -563,6 +737,7 @@ async fn index() -> Html<&'static str> {
                         }
                         audioEl.srcObject = evt.streams[0];
                         audioEl.muted = isDeafened;
+                        setupAudioAnalyzer(targetUser, evt.streams[0]);
                     } else if (evt.track.kind === 'video') {
                         let grid = document.getElementById('video-grid');
                         grid.style.display = 'flex';
@@ -618,7 +793,7 @@ async fn index() -> Html<&'static str> {
                 }
             }
 
-            /* --- CONTROLS: MUTE, DEAFEN, SCREENSHARE --- */
+            /* --- CONTROLS: MUTE, DEAFEN, PRIVATE SCREENSHARE --- */
             function toggleMute() {
                 isMuted = !isMuted;
                 if (localStream) {
@@ -639,6 +814,11 @@ async fn index() -> Html<&'static str> {
             }
 
             async function toggleScreenShare() {
+                if (!currentRoom || currentRoom === 'general') {
+                    alert("Screen sharing is strictly enabled ONLY inside private voice rooms.");
+                    return;
+                }
+
                 if (localScreenStream) {
                     localScreenStream.getTracks().forEach(t => t.stop());
                     localScreenStream = null;
@@ -663,7 +843,6 @@ async fn index() -> Html<&'static str> {
                     }
                     localVid.srcObject = localScreenStream;
 
-                    // Add Screen tracks to active WebRTC peer connections
                     Object.values(peerConnections).forEach(pc => {
                         localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                     });
@@ -673,7 +852,7 @@ async fn index() -> Html<&'static str> {
                 }
             }
 
-            /* --- PRIVATE VC INVITE SYSTEM --- */
+            /* --- INVITES --- */
             function inviteUser(targetUser) {
                 const roomToken = "vc-priv-" + Math.random().toString(36).substring(2, 9);
                 const inviteUrl = `${window.location.origin}${window.location.pathname}#room=${roomToken}`;
@@ -685,14 +864,13 @@ async fn index() -> Html<&'static str> {
                     ws.send(JSON.stringify({ type: "VoiceInvite", target: targetUser, room_id: roomToken }));
                 }
 
-                // Automatically join creator into private channel
                 toggleVoiceChannel(roomToken);
             }
 
             function showInviteToast(fromUser, roomId) {
                 pendingInviteRoom = roomId;
                 document.getElementById('toast-title').innerText = `Voice Call from ${fromUser}`;
-                document.getElementById('toast-body').innerText = `${fromUser} invited you to a secure private voice room.`;
+                document.getElementById('toast-body').innerText = `${fromUser} invited you to a private voice room.`;
                 document.getElementById('toast').style.display = 'block';
             }
 
@@ -709,7 +887,7 @@ async fn index() -> Html<&'static str> {
                 pendingInviteRoom = null;
             }
 
-            /* --- TYPING & INPUT --- */
+            /* --- TYPING & ESCAPING --- */
             function handleTypingEvent(user, isTyping) {
                 if (user === myUsername) return;
                 if (isTyping) activeTypers.add(user);
@@ -740,7 +918,12 @@ async fn index() -> Html<&'static str> {
             document.getElementById('room-key').addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptJoin(); });
 
             function escapeHtml(text) {
-                return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                return text
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
             }
         </script>
     </body>
@@ -800,6 +983,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let history_event = ServerEvent::History { messages: history };
     let _ = sender.send(Message::Text(serde_json::to_string(&history_event).unwrap())).await;
 
+    {
+        let v_states = state.voice_states.lock().unwrap();
+        for (u, r) in v_states.iter() {
+            let evt = ServerEvent::VoiceStateUpdate { username: u.clone(), room_id: Some(r.clone()) };
+            let _ = sender.send(Message::Text(serde_json::to_string(&evt).unwrap())).await;
+        }
+    }
+
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             if sender.send(Message::Text(msg)).await.is_err() {
@@ -846,7 +1037,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                     ClientEvent::VoiceInvite { target, room_id } => {
                         let evt = ServerEvent::VoiceInvite { from: username_clone.clone(), room_id };
-                        // Broadcast target-filtered notification event
+                        let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
+                    }
+                    ClientEvent::VoiceStateUpdate { room_id } => {
+                        {
+                            let mut v_states = state_clone.voice_states.lock().unwrap();
+                            if let Some(ref r) = room_id {
+                                v_states.insert(username_clone.clone(), r.clone());
+                            } else {
+                                v_states.remove(&username_clone);
+                            }
+                        }
+                        let evt = ServerEvent::VoiceStateUpdate { username: username_clone.clone(), room_id };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
                     ClientEvent::Join { .. } => {}
@@ -865,6 +1067,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         users.remove(&my_id);
         let users_snapshot = users.clone();
         broadcast_user_list(&state, &users_snapshot);
+
+        let mut v_states = state.voice_states.lock().unwrap();
+        v_states.remove(&my_username);
+        let evt = ServerEvent::VoiceStateUpdate { username: my_username.clone(), room_id: None };
+        let _ = state.tx.send(serde_json::to_string(&evt).unwrap());
     }
 }
 
