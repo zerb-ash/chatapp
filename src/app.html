@@ -123,33 +123,34 @@
         .chat-header { height: 48px; padding: 0 16px; border-bottom: 1px solid #1f2023; font-weight: 600; color: #f2f3f5; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 0 rgba(0,0,0,0.1); flex-shrink: 0; }
         .chat-header .hash { color: #949ba4; font-size: 22px; font-weight: 400; line-height: 1; }
 
-        /* Voice call stage (Discord-style) */
-        #vc-stage { display: none; flex-direction: column; background: #1e1f22; border-bottom: 1px solid #1f2023; flex-shrink: 0; }
-        #vc-stage.visible { display: flex; }
-        .vc-stage-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #2b2d31; min-height: 72px; }
-        .vc-stage-info { display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: #f2f3f5; }
-        .vc-stage-icon { font-size: 16px; }
-        #vc-participant-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
-        .vc-bubble { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; flex-shrink: 0; }
-        .vc-bubble-avatar { width: 52px; height: 52px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 3px solid #1e1f22; transition: border-color 0.1s, box-shadow 0.1s; position: relative; }
-        .vc-bubble-avatar.speaking { border-color: #23a55a; box-shadow: 0 0 0 2px rgba(35,165,90,0.35); }
-        .vc-bubble-avatar.sharing::after { content: ""; position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; background: #5865f2; border: 2px solid #2b2d31; border-radius: 4px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z'/%3E%3C/svg%3E"); background-size: 10px; background-repeat: no-repeat; background-position: center; }
-        .vc-bubble-name { font-size: 11px; color: #b5bac1; max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
-        .vc-stage-leave { flex-shrink: 0; padding: 6px 12px; background: #4e5058; border: none; border-radius: 4px; color: #dbdee1; font-size: 12px; font-weight: 600; cursor: pointer; }
-        .vc-stage-leave:hover { background: #da373c; color: #fff; }
-        #screen-share-wrap { display: none; flex-direction: column; border-top: 1px solid #1f2023; }
-        #screen-share-wrap.visible { display: flex; }
-        #screen-share-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; background: #232428; font-size: 12px; font-weight: 600; color: #949ba4; }
-        #video-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; max-height: 260px; overflow: auto; }
-        .video-tile { position: relative; flex: 0 1 320px; min-width: 200px; max-width: 100%; height: 180px; background: #111214; border-radius: 8px; overflow: hidden; }
+        /* Voice connected panel (sidebar, Discord-style) */
+        #vc-connected { display: none; background: #232428; padding: 10px 12px; border-top: 1px solid #1f2023; flex-shrink: 0; }
+        #vc-connected.visible { display: block; }
+        .vc-connected-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        .vc-connected-status { font-size: 12px; font-weight: 700; color: #23a559; line-height: 1.2; }
+        .vc-connected-room { font-size: 11px; color: #949ba4; margin-top: 2px; }
+        .vc-connected-leave { width: 28px; height: 28px; flex-shrink: 0; background: #4e5058; border: none; border-radius: 50%; color: #dbdee1; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .vc-connected-leave:hover { background: #da373c; color: #fff; }
+        #vc-participant-row { display: flex; flex-wrap: wrap; gap: 6px; }
+        .vc-bubble { position: relative; flex-shrink: 0; }
+        .vc-bubble-avatar { position: relative; width: 32px; height: 32px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid #232428; transition: border-color 0.1s, box-shadow 0.1s; }
+        .vc-bubble-avatar.speaking { border-color: #23a55a; box-shadow: 0 0 0 2px rgba(35,165,90,0.4); }
+        .vc-bubble-avatar.sharing::after { content: ""; position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px; background: #5865f2; border: 2px solid #232428; border-radius: 3px; }
+
+        /* Screen share strip (main area, only when active) */
+        #screen-share-wrap { display: none; flex-shrink: 0; background: #2b2d31; border-bottom: 1px solid #1f2023; }
+        #screen-share-wrap.visible { display: block; }
+        #screen-share-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; font-size: 12px; font-weight: 600; color: #949ba4; }
+        #video-grid { display: flex; gap: 8px; padding: 0 12px 12px; overflow-x: auto; }
+        .video-tile { position: relative; flex: 0 0 auto; width: min(360px, 100%); height: 200px; background: #111214; border-radius: 8px; overflow: hidden; border: 1px solid #1f2023; }
         .video-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #111214; }
-        .video-tile .tile-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.75); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; pointer-events: none; }
-        .video-tile .tile-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+        .video-tile .tile-label { position: absolute; bottom: 6px; left: 6px; background: rgba(0,0,0,0.8); padding: 3px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #fff; pointer-events: none; }
+        .video-tile .tile-controls { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
         .video-tile:hover .tile-controls { opacity: 1; }
-        .tile-btn { background: rgba(0,0,0,0.75); border: none; color: #fff; width: 32px; height: 32px; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .tile-btn { background: rgba(0,0,0,0.75); border: none; color: #fff; width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; }
         .tile-btn:hover { background: #5865f2; }
 
-        #messages { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; }
+        #messages { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
         .msg-group { display: flex; gap: 16px; margin-top: 16px; width: 100%; }
         .msg-group.grouped { margin-top: 2px; }
         .avatar-col { width: 40px; display: flex; justify-content: center; flex-shrink: 0; }
@@ -458,6 +459,17 @@
         <button onclick="voteCloseGroup(true)">Vote to Close Room</button>
     </div>
 
+    <div id="vc-connected">
+        <div class="vc-connected-head">
+            <div>
+                <div class="vc-connected-status">Voice Connected</div>
+                <div class="vc-connected-room" id="vc-connected-room">general</div>
+            </div>
+            <button type="button" class="vc-connected-leave" onclick="leaveVoiceChannel()" title="Disconnect">📞</button>
+        </div>
+        <div id="vc-participant-row"></div>
+    </div>
+
     <div id="user-panel">
         <div class="avatar" id="panel-avatar">?</div>
         <div class="user-meta">
@@ -479,22 +491,12 @@
         <span class="viewer-count" id="header-viewer-count">👁 0</span>
     </div>
 
-    <div id="vc-stage">
-        <div class="vc-stage-bar">
-            <div class="vc-stage-info">
-                <span class="vc-stage-icon">🔊</span>
-                <span id="vc-stage-label">Voice Connected</span>
-            </div>
-            <div id="vc-participant-row"></div>
-            <button type="button" class="vc-stage-leave" onclick="leaveVoiceChannel()">Disconnect</button>
+    <div id="screen-share-wrap">
+        <div id="screen-share-header">
+            <span>Screen Share</span>
+            <span id="video-count"></span>
         </div>
-        <div id="screen-share-wrap">
-            <div id="screen-share-header">
-                <span>Screen Share</span>
-                <span id="video-count"></span>
-            </div>
-            <div id="video-grid"></div>
-        </div>
+        <div id="video-grid"></div>
     </div>
 
     <div id="messages"></div>
@@ -1544,8 +1546,37 @@
     };
 
     const audioEncoding = {
-        maxBitrate: 128_000
+        maxBitrate: 128_000,
+        dtx: false
     };
+
+    function mungeSdp(sdp) {
+        if (!sdp) return sdp;
+        let s = sdp.replace(/usedtx=1/g, "usedtx=0");
+        s = s.replace(/a=fmtp:(\d+) ([^\r\n]+)/g, (line, pt, params) => {
+            if (!/minptime|useinbandfec|stereo/.test(params)) return line;
+            if (params.includes("usedtx=0")) return line;
+            return `a=fmtp:${pt} ${params};usedtx=0`;
+        });
+        return s;
+    }
+
+    function mungedDesc(desc) {
+        if (!desc) return desc;
+        return { type: desc.type, sdp: mungeSdp(desc.sdp) };
+    }
+
+    async function setLocalOffer(pc) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(mungedDesc(offer));
+        return pc.localDescription;
+    }
+
+    async function setLocalAnswer(pc) {
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(mungedDesc(answer));
+        return pc.localDescription;
+    }
 
     DOMPurify.setConfig({
         ALLOWED_TAGS: ["b", "i", "em", "strong", "a", "code", "pre", "br", "p", "span", "img", "video", "ul", "ol", "li", "div", "button"],
@@ -1987,15 +2018,17 @@
         try {
             localStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
+                    echoCancellation: { ideal: true },
+                    noiseSuppression: { ideal: false },
+                    autoGainControl: { ideal: false },
                     sampleRate: { ideal: 48000 },
                     channelCount: { ideal: 1 }
                 },
                 video: false
             });
+            localStream.getAudioTracks().forEach(t => { t.enabled = true; });
             setupLocalAnalyzer(localStream);
+            syncLocalAudioState();
         } catch (err) {
             alert("Could not access microphone: " + err.message);
             currentRoom = null;
@@ -2047,7 +2080,7 @@
 
         document.getElementById("remote-audio-container").innerHTML = "";
         document.getElementById("video-grid").innerHTML = "";
-        document.getElementById("vc-stage").classList.remove("visible");
+        document.getElementById("vc-connected").classList.remove("visible");
         document.getElementById("screen-share-wrap").classList.remove("visible");
         stopSpeakingMonitor();
         renderVCRosters();
@@ -2090,10 +2123,12 @@
         users.forEach(user => {
             const initial = user.charAt(0).toUpperCase();
             const sharing = user === myUsername ? isScreenSharing : !!document.getElementById(`tile-${user}`);
+            const label = user === myUsername ? "You" : user;
             const bubble = document.createElement("div");
             bubble.className = "vc-bubble";
             bubble.id = `vc-bubble-${user}`;
-            bubble.innerHTML = `<div class="vc-bubble-avatar${sharing ? " sharing" : ""}" id="vc-avatar-${user}">${initial}</div><span class="vc-bubble-name">${escapeHtml(user === myUsername ? "You" : user)}</span>`;
+            bubble.title = label + (sharing ? " (sharing screen)" : "");
+            bubble.innerHTML = `<div class="vc-bubble-avatar${sharing ? " sharing" : ""}" id="vc-avatar-${user}">${initial}</div>`;
             row.appendChild(bubble);
         });
     }
@@ -2116,35 +2151,30 @@
     }
 
     function updateVcStage() {
-        const stage = document.getElementById("vc-stage");
+        const connected = document.getElementById("vc-connected");
         const shareWrap = document.getElementById("screen-share-wrap");
-        if (!stage || !shareWrap) return;
+        if (!connected || !shareWrap) return;
 
         if (!currentRoom) {
-            stage.classList.remove("visible");
+            connected.classList.remove("visible");
             shareWrap.classList.remove("visible");
             return;
         }
 
-        stage.classList.add("visible");
+        connected.classList.add("visible");
         let label = currentRoom;
         if (currentRoom.includes(":")) {
             const parts = currentRoom.split(":");
             label = parts[parts.length - 1];
         }
-        document.getElementById("vc-stage-label").textContent = "Voice — " + label;
+        document.getElementById("vc-connected-room").textContent = label;
 
         pruneDeadVideoTiles();
         renderVcParticipants();
 
         const count = document.querySelectorAll("#video-grid .video-tile").length;
-        if (count > 0) {
-            shareWrap.classList.add("visible");
-            document.getElementById("video-count").textContent = count + " stream" + (count !== 1 ? "s" : "");
-        } else {
-            shareWrap.classList.remove("visible");
-            document.getElementById("video-count").textContent = "";
-        }
+        shareWrap.classList.toggle("visible", count > 0);
+        document.getElementById("video-count").textContent = count > 0 ? count + " stream" + (count !== 1 ? "s" : "") : "";
     }
 
     function renderVCRosters() {
@@ -2233,13 +2263,12 @@
             audioEl.playsInline = true;
             document.getElementById("remote-audio-container").appendChild(audioEl);
         }
-        const stream = audioEl.srcObject instanceof MediaStream ? audioEl.srcObject : new MediaStream();
-        stream.getAudioTracks().forEach(t => stream.removeTrack(t));
-        stream.addTrack(track);
-        audioEl.srcObject = stream;
+        const cur = audioEl.srcObject instanceof MediaStream ? audioEl.srcObject.getAudioTracks()[0] : null;
+        if (cur !== track) audioEl.srcObject = new MediaStream([track]);
         audioEl.muted = isDeafened || forceDeafened;
-        audioEl.play().catch(() => {});
-        track.onunmute = () => audioEl.play().catch(() => {});
+        const play = () => audioEl.play().catch(() => {});
+        play();
+        track.onunmute = play;
     }
 
     function ensureVideoTile(userId, isLocal) {
@@ -2303,6 +2332,12 @@
 
     function handleScreenShareState(username, sharing) {
         if (sharing) {
+            const pc = peerConnections[username];
+            if (pc) {
+                syncPeerMedia(username, pc);
+                setTimeout(() => syncPeerMedia(username, pc), 300);
+                setTimeout(() => syncPeerMedia(username, pc), 1000);
+            }
             updateVcStage();
             return;
         }
@@ -2317,10 +2352,10 @@
 
         let vt = videoTransceivers[targetUser];
         if (!vt) {
-            vt = pc.addTransceiver("video", { direction: "sendonly" });
+            vt = pc.addTransceiver("video", { direction: "sendrecv" });
             videoTransceivers[targetUser] = vt;
         } else {
-            vt.direction = "sendonly";
+            vt.direction = "sendrecv";
         }
 
         await vt.sender.replaceTrack(videoTrack);
@@ -2334,7 +2369,7 @@
         if (!sender && !vt) return;
 
         if (sender) await sender.replaceTrack(null);
-        if (vt) vt.direction = "inactive";
+        if (vt) vt.direction = "recvonly";
 
         delete screenShareSenders[targetUser];
     }
@@ -2359,7 +2394,8 @@
             if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
             params.encodings[0].maxBitrate = audioEncoding.maxBitrate;
             params.encodings[0].priority = "high";
-            params.degradationPreference = "maintain-framerate";
+            params.encodings[0].networkPriority = "high";
+            params.encodings[0].dtx = false;
             await sender.setParameters(params);
         } catch (e) {
             console.warn("Could not set audio encoding:", e);
@@ -2394,7 +2430,7 @@
         if (!pc || pc._suppressNegotiation || pc.signalingState !== "stable") return;
         try {
             pc.makingOffer = true;
-            await pc.setLocalDescription(await pc.createOffer());
+            await setLocalOffer(pc);
             sendVoiceSignal(targetUser, { sdp: pc.localDescription });
             if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
             else {
@@ -2434,7 +2470,7 @@
             if (pc._suppressNegotiation) return;
             try {
                 pc.makingOffer = true;
-                await pc.setLocalDescription();
+                await setLocalOffer(pc);
                 sendVoiceSignal(targetUser, { sdp: pc.localDescription });
                 if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
                 else {
@@ -2463,7 +2499,7 @@
                 }
             }
 
-            videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "inactive" });
+            videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "recvonly" });
 
             if (localScreenStream) await addScreenShareToPeer(targetUser, pc);
         })();
@@ -2472,6 +2508,9 @@
         if (!incoming && !pc.polite && pc.signalingState === "stable") {
             await renegotiatePeer(targetUser, pc);
         }
+
+        const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+        if (audioSender) await applyAudioEncoding(audioSender);
 
         return pc;
     }
@@ -2510,14 +2549,15 @@
             }
 
             if (description.type === "offer") {
-                await pc.setLocalDescription();
+                await setLocalAnswer(pc);
                 sendVoiceSignal(fromUser, { sdp: pc.localDescription });
             }
 
             syncPeerMedia(fromUser, pc);
             setTimeout(() => syncPeerMedia(fromUser, pc), 250);
             setTimeout(() => syncPeerMedia(fromUser, pc), 800);
-            setTimeout(() => syncPeerMedia(fromUser, pc), 2000);
+            const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+            if (audioSender) await applyAudioEncoding(audioSender);
         } else if (signal.candidate) {
             const candidate = new RTCIceCandidate(signal.candidate);
             if (pc.remoteDescription && pc.remoteDescription.type) {
@@ -2583,9 +2623,10 @@
             for (const [target, pc] of Object.entries(peerConnections)) {
                 await addScreenShareToPeer(target, pc);
                 await renegotiatePeer(target, pc);
+                syncPeerMedia(target, pc);
             }
-            setTimeout(refreshAllScreenEncodings, 500);
-            setTimeout(refreshAllScreenEncodings, 2000);
+            setTimeout(refreshAllScreenEncodings, 300);
+            setTimeout(refreshAllScreenEncodings, 1500);
 
             notifyScreenShareState(true);
         } catch (err) {
