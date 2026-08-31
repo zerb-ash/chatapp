@@ -625,6 +625,10 @@
             ._xAct.b{background:#da373c}
             ._xAct.n{background:#5865f2}
             ._xAct.g{background:#23a559}
+            ._xAct.p{background:#4e5058}
+            ._xSub{font-size:11px;color:#949ba4;margin-top:4px}
+            ._xLive{display:inline-block;width:8px;height:8px;border-radius:50%;background:#23a559;margin-right:6px;animation:_xPulse 2s infinite}
+            @keyframes _xPulse{0%,100%{opacity:1}50%{opacity:.4}}
             ._xRail{background:#313338;color:#faa61a;font-size:20px}
             ._xRail:hover{background:#faa61a;color:#1e1f22}`;
         document.head.appendChild(s);
@@ -645,20 +649,25 @@
         _xRoot = document.createElement("div");
         _xRoot.className = "_xOv";
         _xRoot.innerHTML = `<div class="_xSh">
-            <div class="_xHd"><div><h2>Control Panel</h2><span data-x="lbl"></span></div>
-            <div style="display:flex;gap:8px"><button class="_xBtn" data-x="ref">Refresh</button><button class="_xBtn" data-x="cls">Close</button></div></div>
+            <div class="_xHd"><div><h2>Control Panel</h2><span data-x="lbl"><span class="_xLive"></span>Live</span></div>
+            <div style="display:flex;gap:8px"><button class="_xBtn" data-x="cls">Close</button></div></div>
             <div class="_xStats" data-x="stats"></div>
-            <div class="_xSec"><h3>Active Users</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="users"><thead><tr><th>User</th><th>Device</th><th>Location</th><th>Voice</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
-            <div class="_xSec"><h3>Rooms</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="rooms"><thead><tr><th>Name</th><th>Owner</th><th>Members</th><th>Active</th><th>Age</th><th>Msgs</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
+            <div class="_xSec"><h3>Active Users</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="users"><thead><tr><th>User</th><th>Device</th><th>Location</th><th>Voice</th><th>Rooms</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
+            <div class="_xSec"><h3>Rooms</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="rooms"><thead><tr><th>Name</th><th>Owner</th><th>Members</th><th>Active</th><th>Age</th><th>Msgs</th><th>Invite</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
             <div class="_xSec"><h3>Restrictions</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="bans"><thead><tr><th>User</th><th>Device</th><th>Type</th><th>Reason</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
         </div>`;
         document.body.appendChild(_xRoot);
         _xRoot.querySelector('[data-x="cls"]').addEventListener("click", () => { _xRoot.style.display = "none"; });
-        _xRoot.querySelector('[data-x="ref"]').addEventListener("click", _xRefresh);
         _xRoot.addEventListener("click", (e) => {
             const btn = e.target.closest("[data-act]");
             if (!btn || !_xValid()) return;
-            _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, btn.dataset.grp || null);
+            let val = btn.dataset.val || null;
+            if (btn.dataset.prompt) {
+                const input = prompt(btn.dataset.prompt);
+                if (input === null || input.trim() === "") return;
+                val = input.trim();
+            }
+            _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, btn.dataset.grp || null, val);
         });
     }
 
@@ -680,7 +689,7 @@
         if (_xRoot) {
             const left = _xExp - Math.floor(Date.now() / 1000);
             const lbl = _xRoot.querySelector('[data-x="lbl"]');
-            if (lbl) lbl.textContent = `Expires in ${formatUptime(left)}`;
+            if (lbl) lbl.innerHTML = `<span class="_xLive"></span>Live · ${formatUptime(left)} left`;
         }
     }
 
@@ -738,7 +747,7 @@
         ws.send(JSON.stringify({ type: "AdminRefresh", token: _xTok }));
     }
 
-    function _xAct(action, target, deviceId, groupId) {
+    function _xAct(action, target, deviceId, groupId, value) {
         if (!ws || !_xValid()) return;
         ws.send(JSON.stringify({
             type: "AdminAction",
@@ -746,25 +755,39 @@
             action,
             target: target || "",
             device_id: deviceId || null,
-            group_id: groupId || null
+            group_id: groupId || null,
+            value: value || null
         }));
     }
 
-    function _xBtn(act, label, cls, tgt, dev, grp) {
-        const d = `data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
-        const devAttr = dev ? ` data-dev="${escapeHtml(dev)}"` : "";
-        const grpAttr = grp ? ` data-grp="${escapeHtml(grp)}"` : "";
-        return `<button class="_xAct ${cls}" ${d}${devAttr}${grpAttr}>${label}</button>`;
+    function _xBtn(act, label, cls, tgt, dev, grp, promptText, val) {
+        let attrs = `data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
+        if (dev) attrs += ` data-dev="${escapeHtml(dev)}"`;
+        if (grp) attrs += ` data-grp="${escapeHtml(grp)}"`;
+        if (promptText) attrs += ` data-prompt="${escapeHtml(promptText)}"`;
+        if (val) attrs += ` data-val="${escapeHtml(val)}"`;
+        return `<button class="_xAct ${cls}" ${attrs}>${label}</button>`;
+    }
+
+    function _xRoomPick(promptText, rooms) {
+        if (!rooms.length) { alert("No rooms available."); return null; }
+        const list = rooms.map((r, i) => `${i + 1}. ${r.name} (${r.id})`).join("\n");
+        const input = prompt(`${promptText}\n\n${list}\n\nEnter room number or id:`);
+        if (!input) return null;
+        const n = parseInt(input, 10);
+        if (!isNaN(n) && n >= 1 && n <= rooms.length) return rooms[n - 1].id;
+        const match = rooms.find(r => r.id === input || r.name === input);
+        return match ? match.id : input;
     }
 
     function _xRender(data) {
         _xTok = data.token;
         _xExp = data.expires_at;
-        _xEnsureUi();
         _xEnsureRail();
         _xStartTimer();
+        if (!_xRoot) return;
         _xTickUi();
-        _xRoot.style.display = "block";
+        if (_xRoot.style.display === "none") return;
 
         const stats = _xRoot.querySelector('[data-x="stats"]');
         stats.innerHTML = `
@@ -779,29 +802,74 @@
         usersBody.innerHTML = "";
         data.active_users.forEach(u => {
             const shortDev = u.device_id.length > 12 ? u.device_id.slice(0, 10) + "..." : u.device_id;
+            const roomList = (u.rooms || []).map(r =>
+                `<div class="_xSub">${escapeHtml(r.name)} ${_xBtn("remove_from_room", "Remove", "b", u.username, null, r.id)} ${_xBtn("force_join_room", "Force In", "n", u.username, null, r.id)}</div>`
+            ).join("") || `<span class="_xSub">hub only</span>`;
+            const voiceInfo = u.in_voice ? (u.voice_room || "Yes") : "No";
             const tr = document.createElement("tr");
             tr.innerHTML = `<td>${escapeHtml(u.username)}${u.globally_muted ? " 🔇" : ""}</td>
                 <td title="${escapeHtml(u.device_id)}">${escapeHtml(shortDev)}</td>
                 <td>${escapeHtml(u.group_id)} / ${escapeHtml(u.channel_id)}</td>
-                <td>${u.in_voice ? "Yes" : "No"}</td>
+                <td title="${escapeHtml(voiceInfo)}">${u.in_voice ? "Yes" : "No"}</td>
+                <td>${roomList}
+                    <div class="_xActs" style="margin-top:4px">                    ${_xBtn("add_to_room", "+ Room", "p", u.username)}
+                    </div></td>
                 <td><div class="_xActs">
+                    ${_xBtn("follow_user", "Follow", "n", u.username)}
+                    ${_xBtn("rename_user", "Rename", "p", u.username, null, null, "New username:")}
+                    ${_xBtn("force_join_room", "Force Room", "p", u.username)}
+                    ${_xBtn("room_timeout", "Timeout", "p", u.username)}
                     ${_xBtn("global_mute", "Mute", "w", u.username)}
                     ${_xBtn("global_unmute", "Unmute", "g", u.username)}
                     ${_xBtn("room_ban_user", "Room Ban", "n", u.username, u.device_id)}
-                    ${_xBtn("ban_device", "Ban Device", "b", u.username, u.device_id)}
-                    ${_xBtn("ban_user", "Ban User", "b", u.username, u.device_id)}
+                    ${_xBtn("ban_device", "Ban Dev", "b", u.username, u.device_id)}
+                    ${_xBtn("ban_user", "Ban", "b", u.username, u.device_id)}
                     ${_xBtn("kick_user", "Kick", "b", u.username)}
                 </div></td>`;
             usersBody.appendChild(tr);
+            tr.querySelector('[data-act="add_to_room"]')?.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const gid = _xRoomPick("Add to room", data.rooms);
+                if (gid) _xAct("add_to_room", u.username, null, gid, null);
+            });
+            tr.querySelector('[data-act="force_join_room"]:not([data-grp])')?.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const gid = _xRoomPick("Force join room", data.rooms);
+                if (gid) _xAct("force_join_room", u.username, null, gid, null);
+            });
+            tr.querySelector('[data-act="room_timeout"]')?.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const input = prompt("Room id, timeout seconds (e.g. grp-abc,300):");
+                if (!input) return;
+                const parts = input.split(",").map(s => s.trim());
+                if (parts.length >= 2) _xAct("room_timeout", u.username, null, parts[0], parts[1]);
+            });
         });
 
         const roomsBody = _xRoot.querySelector('[data-x="rooms"] tbody');
         roomsBody.innerHTML = "";
         data.rooms.forEach(r => {
+            const memberBtns = (r.members || []).map(m =>
+                `${escapeHtml(m)} ${m !== r.owner
+                    ? _xBtn("transfer_owner", "Owner", "g", m, null, r.id)
+                    + _xBtn("kick_from_room", "Kick", "b", m, null, r.id)
+                    + _xBtn("room_mute", "Mute", "w", m, null, r.id)
+                    + _xBtn("room_deafen", "Deaf", "w", m, null, r.id)
+                    : " 👑"}`
+            ).join("<br>") || "—";
+            const shortInv = r.invite_code ? r.invite_code.slice(0, 8) + "..." : "—";
             const tr = document.createElement("tr");
-            tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.owner)}</td><td>${r.members}</td>
+            tr.innerHTML = `<td>${escapeHtml(r.name)}<div class="_xSub">${escapeHtml(r.id)}</div></td>
+                <td>${escapeHtml(r.owner)}</td>
+                <td>${memberBtns}<div class="_xSub">${r.member_count} total</div></td>
                 <td>${r.active_members}</td><td>${formatAge(r.age_secs)}</td><td>${r.message_count}</td>
-                <td>${_xBtn("delete_room", "Delete", "b", "", null, r.id)}</td>`;
+                <td title="${escapeHtml(r.invite_code || "")}">${escapeHtml(shortInv)}</td>
+                <td><div class="_xActs">
+                    ${_xBtn("rename_room", "Rename", "p", "", null, r.id, "New room name:")}
+                    ${_xBtn("reset_invite", "New Invite", "n", "", null, r.id)}
+                    ${_xBtn("clear_messages", "Clear Msgs", "w", "", null, r.id)}
+                    ${_xBtn("delete_room", "Delete", "b", "", null, r.id)}
+                </div></td>`;
             roomsBody.appendChild(tr);
         });
 
@@ -818,6 +886,14 @@
                 </div></td>`;
             bansBody.appendChild(tr);
         });
+    }
+
+    function _xNavigate(event) {
+        if (event.group_id === "hub") switchGroup("hub");
+        else switchGroup(event.group_id);
+        if (event.channel_id && event.channel_id !== "general") {
+            selectTextChannel(event.channel_id, event.channel_id);
+        }
     }
 
     function applyGlobalAdminState(data) {
@@ -1447,6 +1523,16 @@
                 case "AdminDashboard":
                     if (event.username !== myUsername || !event.token) break;
                     _xRender(event);
+                    break;
+                case "AdminNavigate":
+                    if (event.username !== myUsername) break;
+                    _xNavigate(event);
+                    break;
+                case "UsernameChanged":
+                    if (event.username !== myUsername) break;
+                    myUsername = event.username;
+                    document.getElementById("panel-username").textContent = myUsername;
+                    document.getElementById("panel-avatar").textContent = myUsername.charAt(0).toUpperCase();
                     break;
                 case "GlobalAdminAction":
                     if (event.username !== myUsername) break;

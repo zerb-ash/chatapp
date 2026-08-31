@@ -52,13 +52,21 @@ struct ChannelInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+struct AdminUserRoom {
+    id: String,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct AdminUserRow {
     username: String,
     device_id: String,
     group_id: String,
     channel_id: String,
     in_voice: bool,
+    voice_room: Option<String>,
     globally_muted: bool,
+    rooms: Vec<AdminUserRoom>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -66,10 +74,12 @@ struct AdminRoomRow {
     id: String,
     name: String,
     owner: String,
-    members: usize,
+    members: Vec<String>,
+    member_count: usize,
     active_members: usize,
     age_secs: u64,
     message_count: usize,
+    invite_code: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -196,6 +206,14 @@ enum ServerEvent {
         rooms: Vec<AdminRoomRow>,
         bans: Vec<AdminBanRow>,
     },
+    AdminNavigate {
+        username: String,
+        group_id: String,
+        channel_id: String,
+    },
+    UsernameChanged {
+        username: String,
+    },
     GlobalAdminAction {
         username: String,
         globally_muted: bool,
@@ -267,6 +285,7 @@ enum ClientEvent {
         target: String,
         device_id: Option<String>,
         group_id: Option<String>,
+        value: Option<String>,
     },
 }
 
@@ -775,6 +794,28 @@ fn active_members_in_group(state: &AppState, members: &HashSet<String>) -> usize
         .count()
 }
 
+fn notify_admin_dashboards(state: &AppState) {
+    let now = now_secs();
+    let sessions: Vec<(usize, String, String)> = {
+        let admin = state.admin_sessions.lock().unwrap();
+        let users = state.users.lock().unwrap();
+        admin
+            .iter()
+            .filter(|(_, s)| s.expires_at > now)
+            .filter_map(|(cid, s)| {
+                users
+                    .get(cid)
+                    .map(|u| (*cid, u.clone(), s.token.clone()))
+            })
+            .collect()
+    };
+    for (conn_id, username, token) in sessions {
+        if let Some(dash) = build_admin_dashboard(state, conn_id, &username, &token) {
+            send_to_user(state, &username, &dash);
+        }
+    }
+}
+
 fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token: &str) -> Option<ServerEvent> {
     if !validate_admin_token(state, conn_id, token) {
         return None;
@@ -788,29 +829,51 @@ fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token
     let now = now_secs();
     let voice = state.voice_states.lock().unwrap().clone();
     let global_mutes = state.global_mutes.lock().unwrap().clone();
+    let groups_snap = state.groups.lock().unwrap().clone();
 
     let active_users: Vec<AdminUserRow> = state
         .conn_states
         .lock()
         .unwrap()
         .values()
-        .map(|c| AdminUserRow {
-            username: c.username.clone(),
-            device_id: c.device_id.clone(),
-            group_id: c.group_id.clone(),
-            channel_id: c.channel_id.clone(),
-            in_voice: voice.contains_key(&c.username),
-            globally_muted: global_mutes
-                .iter()
-                .any(|u| u.eq_ignore_ascii_case(&c.username)),
+        .map(|c| {
+            let mut rooms = Vec::new();
+            for rid in &c.member_of {
+                if rid == HUB_ID {
+                    continue;
+                }
+                if let Some(g) = groups_snap.get(rid) {
+                    rooms.push(AdminUserRoom {
+                        id: rid.clone(),
+                        name: g.name.clone(),
+                    });
+                }
+            }
+            AdminUserRow {
+                username: c.username.clone(),
+                device_id: c.device_id.clone(),
+                group_id: c.group_id.clone(),
+                channel_id: c.channel_id.clone(),
+                in_voice: voice.contains_key(&c.username),
+                voice_room: voice.get(&c.username).cloned(),
+                globally_muted: global_mutes
+                    .iter()
+                    .any(|u| u.eq_ignore_ascii_case(&c.username)),
+                rooms,
+            }
         })
         .collect();
 
-    let groups = state.groups.lock().unwrap();
-    let online = state.users.lock().unwrap().values().cloned().collect::<HashSet<_>>();
+    let online = state
+        .users
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
     let mut rooms = Vec::new();
     let mut inactive_rooms = 0usize;
-    for (id, g) in groups.iter() {
+    for (id, g) in groups_snap.iter() {
         let active = g.members.iter().filter(|m| online.contains(*m)).count();
         if active == 0 {
             inactive_rooms += 1;
@@ -819,14 +882,15 @@ fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token
             id: id.clone(),
             name: g.name.clone(),
             owner: g.owner.clone(),
-            members: g.members.len(),
+            members: g.members.iter().cloned().collect(),
+            member_count: g.members.len(),
             active_members: active,
             age_secs: now.saturating_sub(g.created_at),
             message_count: count_group_messages(g),
+            invite_code: g.invite_code.clone(),
         });
     }
     let total_rooms = rooms.len();
-    drop(groups);
 
     let bans: Vec<AdminBanRow> = state
         .global_bans
@@ -856,6 +920,452 @@ fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token
     })
 }
 
+fn admin_set_mod_mute(state: &AppState, group_id: &str, target: &str, enabled: bool) {
+    if group_id == HUB_ID || target.is_empty() {
+        return;
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .entry(target.to_string())
+        .or_default()
+        .force_muted = enabled;
+    send_mod_update(state, group_id, target);
+}
+
+fn admin_set_mod_deafen(state: &AppState, group_id: &str, target: &str, enabled: bool) {
+    if group_id == HUB_ID || target.is_empty() {
+        return;
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .entry(target.to_string())
+        .or_default()
+        .force_deafened = enabled;
+    send_mod_update(state, group_id, target);
+}
+
+fn admin_timeout_member(state: &AppState, group_id: &str, target: &str, duration_secs: u64) {
+    if group_id == HUB_ID || target.is_empty() || duration_secs == 0 || duration_secs > 604_800 {
+        return;
+    }
+    {
+        let mut mods = state.mod_states.lock().unwrap();
+        let entry = mods.entry(group_id.to_string()).or_default();
+        let ms = entry.entry(target.to_string()).or_default();
+        ms.timeout_until = now_secs() + duration_secs;
+        ms.force_muted = true;
+        ms.force_deafened = true;
+    }
+    admin_kick_from_room(state, group_id, target);
+    send_mod_update(state, group_id, target);
+}
+
+fn admin_ensure_member(state: &AppState, group_id: &str, username: &str) {
+    if group_id == HUB_ID || username.is_empty() {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        g.members.insert(username.to_string());
+        g.close_votes.remove(username);
+        group_info(group_id, g)
+    };
+    if let Some(&cid) = state.user_conns.lock().unwrap().get(username) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&cid) {
+            cs.member_of.insert(group_id.to_string());
+        }
+        send_group_list(state, cid, username);
+    }
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+}
+
+fn admin_force_join_room(state: &AppState, group_id: &str, target: &str) {
+    if group_id == HUB_ID || target.is_empty() {
+        return;
+    }
+    admin_ensure_member(state, group_id, target);
+    if let Some(&cid) = state.user_conns.lock().unwrap().get(target) {
+        {
+            let mut cs = state.conn_states.lock().unwrap();
+            let Some(c) = cs.get_mut(&cid) else {
+                return;
+            };
+            c.group_id = group_id.to_string();
+            c.channel_id = "general".to_string();
+        }
+        send_history(state, cid, target, group_id, "general");
+        broadcast_channel_viewers(state, group_id, "general");
+    }
+}
+
+fn admin_remove_from_room(state: &AppState, group_id: &str, target: &str) {
+    if group_id == HUB_ID || target.is_empty() {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        if g.owner == target {
+            return;
+        }
+        g.members.remove(target);
+        g.close_votes.remove(target);
+        group_info(group_id, g)
+    };
+    disconnect_from_group_vc(state, target, group_id);
+    if let Some(&cid) = state.user_conns.lock().unwrap().get(target) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&cid) {
+            cs.member_of.remove(group_id);
+            if cs.group_id == group_id {
+                cs.group_id = HUB_ID.into();
+                cs.channel_id = "general".into();
+                send_history(state, cid, target, HUB_ID, "general");
+            }
+        }
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .remove(target);
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+}
+
+fn admin_kick_from_room(state: &AppState, group_id: &str, target: &str) {
+    if group_id == HUB_ID || target.is_empty() {
+        return;
+    }
+    let group_name = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        if g.owner == target {
+            return;
+        }
+        g.members.remove(target);
+        g.close_votes.remove(target);
+        g.name.clone()
+    };
+    disconnect_from_group_vc(state, target, group_id);
+    if let Some(&cid) = state.user_conns.lock().unwrap().get(target) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&cid) {
+            cs.member_of.remove(group_id);
+            if cs.group_id == group_id {
+                cs.group_id = HUB_ID.into();
+                cs.channel_id = "general".into();
+                send_history(state, cid, target, HUB_ID, "general");
+            }
+        }
+    }
+    state
+        .mod_states
+        .lock()
+        .unwrap()
+        .entry(group_id.to_string())
+        .or_default()
+        .remove(target);
+    send_to_user(
+        state,
+        target,
+        &ServerEvent::KickedFromGroup {
+            username: target.to_string(),
+            group_id: group_id.to_string(),
+            group_name,
+        },
+    );
+    if let Some(g) = state.groups.lock().unwrap().get(group_id) {
+        broadcast(
+            state,
+            &ServerEvent::GroupUpdated {
+                group: group_info(group_id, g),
+            },
+        );
+    }
+}
+
+fn admin_transfer_owner(state: &AppState, group_id: &str, new_owner: &str) {
+    if group_id == HUB_ID || new_owner.is_empty() {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        if !g.members.contains(new_owner) {
+            return;
+        }
+        g.owner = new_owner.to_string();
+        g.members.insert(new_owner.to_string());
+        group_info(group_id, g)
+    };
+    if let Some(&cid) = state.user_conns.lock().unwrap().get(new_owner) {
+        if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&cid) {
+            cs.member_of.insert(group_id.to_string());
+        }
+    }
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+}
+
+fn admin_rename_room(state: &AppState, group_id: &str, new_name: &str) {
+    if group_id == HUB_ID {
+        return;
+    }
+    let clean = new_name.trim();
+    if clean.is_empty() || clean.len() > 48 {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        g.name = clean.to_string();
+        group_info(group_id, g)
+    };
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+}
+
+fn admin_reset_invite(state: &AppState, group_id: &str) {
+    if group_id == HUB_ID {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        let mut idx = state.invite_index.lock().unwrap();
+        idx.remove(&g.invite_code);
+        let invite = rand_token("inv-", 10);
+        g.invite_code = invite.clone();
+        idx.insert(invite, group_id.to_string());
+        group_info(group_id, g)
+    };
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+}
+
+fn admin_clear_messages(state: &AppState, group_id: &str, channel_id: Option<&str>) {
+    if group_id == HUB_ID {
+        let mut hub = state.hub_messages.lock().unwrap();
+        if let Some(cid) = channel_id {
+            hub.remove(cid);
+        } else {
+            hub.clear();
+        }
+        return;
+    }
+    let mut groups = state.groups.lock().unwrap();
+    let Some(g) = groups.get_mut(group_id) else {
+        return;
+    };
+    if let Some(cid) = channel_id {
+        g.messages.remove(cid);
+    } else {
+        g.messages.clear();
+    }
+}
+
+fn admin_rename_user(state: &AppState, old: &str, new: &str) {
+    let new = new.trim();
+    if new.is_empty() || new.len() > 32 {
+        return;
+    }
+    let (conn_id, old_exact) = {
+        let users = state.users.lock().unwrap();
+        if users.values().any(|u| u.eq_ignore_ascii_case(new)) {
+            return;
+        }
+        users
+            .iter()
+            .find(|(_, u)| u.eq_ignore_ascii_case(old))
+            .map(|(cid, u)| (*cid, u.clone()))
+    };
+    let Some((conn_id, old_exact)) = conn_id else {
+        return;
+    };
+    if old_exact.eq_ignore_ascii_case(new) {
+        return;
+    }
+
+    state.users.lock().unwrap().insert(conn_id, new.to_string());
+    state.user_conns.lock().unwrap().remove(&old_exact);
+    state.user_conns.lock().unwrap().insert(new.to_string(), conn_id);
+
+    if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&conn_id) {
+        cs.username = new.to_string();
+    }
+
+    if let Some(room) = state.voice_states.lock().unwrap().remove(&old_exact) {
+        state.voice_states.lock().unwrap().insert(new.to_string(), room);
+    }
+
+    for g in state.groups.lock().unwrap().values_mut() {
+        if g.members.remove(&old_exact) {
+            g.members.insert(new.to_string());
+        }
+        if g.owner == old_exact {
+            g.owner = new.to_string();
+        }
+        if g.close_votes.remove(&old_exact) {
+            g.close_votes.insert(new.to_string());
+        }
+        for msgs in g.messages.values_mut() {
+            for m in msgs.iter_mut() {
+                if m.username == old_exact {
+                    m.username = new.to_string();
+                }
+            }
+        }
+    }
+
+    for msgs in state.hub_messages.lock().unwrap().values_mut() {
+        for m in msgs.iter_mut() {
+            if m.username == old_exact {
+                m.username = new.to_string();
+            }
+        }
+    }
+
+    for room_mods in state.mod_states.lock().unwrap().values_mut() {
+        if let Some(ms) = room_mods.remove(&old_exact) {
+            room_mods.insert(new.to_string(), ms);
+        }
+    }
+
+    {
+        let mutes = state.global_mutes.lock().unwrap().clone();
+        state.global_mutes.lock().unwrap().clear();
+        for u in mutes {
+            if u.eq_ignore_ascii_case(&old_exact) {
+                state.global_mutes.lock().unwrap().insert(new.to_string());
+            } else {
+                state.global_mutes.lock().unwrap().insert(u);
+            }
+        }
+    }
+
+    {
+        let banned = state.room_banned_users.lock().unwrap().clone();
+        state.room_banned_users.lock().unwrap().clear();
+        for u in banned {
+            if u.eq_ignore_ascii_case(&old_exact) {
+                state
+                    .room_banned_users
+                    .lock()
+                    .unwrap()
+                    .insert(new.to_string());
+            } else {
+                state.room_banned_users.lock().unwrap().insert(u);
+            }
+        }
+    }
+
+    for ban in state.global_bans.lock().unwrap().iter_mut() {
+        if ban
+            .username
+            .as_ref()
+            .map(|u| u.eq_ignore_ascii_case(&old_exact))
+            .unwrap_or(false)
+        {
+            ban.username = Some(new.to_string());
+        }
+    }
+
+    state.lifetime_users.lock().unwrap().remove(&old_exact);
+    state.lifetime_users.lock().unwrap().insert(new.to_string());
+
+    let active: Vec<String> = state.users.lock().unwrap().values().cloned().collect();
+    broadcast(state, &ServerEvent::UserList { users: active });
+    send_to_user(
+        state,
+        new,
+        &ServerEvent::UsernameChanged {
+            username: new.to_string(),
+        },
+    );
+    send_global_admin_action(state, new);
+}
+
+fn admin_follow_user(state: &AppState, admin_conn_id: usize, admin_name: &str, target: &str) {
+    if target.is_empty() || admin_name.eq_ignore_ascii_case(target) {
+        return;
+    }
+    let loc = state
+        .conn_states
+        .lock()
+        .unwrap()
+        .values()
+        .find(|c| c.username.eq_ignore_ascii_case(target))
+        .map(|c| (c.group_id.clone(), c.channel_id.clone()));
+    let Some((gid, cid)) = loc else {
+        return;
+    };
+    if gid != HUB_ID {
+        admin_ensure_member(state, &gid, admin_name);
+    }
+    {
+        let mut cs = state.conn_states.lock().unwrap();
+        let Some(c) = cs.get_mut(&admin_conn_id) else {
+            return;
+        };
+        c.group_id = gid.clone();
+        c.channel_id = cid.clone();
+    }
+    send_history(state, admin_conn_id, admin_name, &gid, &cid);
+    broadcast_channel_viewers(state, &gid, &cid);
+    send_to_user(
+        state,
+        admin_name,
+        &ServerEvent::AdminNavigate {
+            username: admin_name.to_string(),
+            group_id: gid,
+            channel_id: cid,
+        },
+    );
+}
+
 fn handle_admin_action(
     state: &AppState,
     conn_id: usize,
@@ -865,27 +1375,29 @@ fn handle_admin_action(
     target: &str,
     device_id: Option<String>,
     group_id: Option<String>,
+    value: Option<String>,
 ) {
     if !validate_admin_token(state, conn_id, token) {
         return;
     }
     let target = target.trim();
-    if target.is_empty() && device_id.is_none() {
-        return;
-    }
+    let value = value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
     match action {
         "ban_user" => {
+            if target.is_empty() {
+                return;
+            }
             state.global_bans.lock().unwrap().push(GlobalBan {
                 username: Some(target.to_string()),
                 device_id: device_id.clone(),
                 room_ban: false,
                 reason: "Banned by admin".into(),
             });
-            if !target.is_empty() {
-                disconnect_user(state, target, "You have been banned.");
-                send_global_admin_action(state, target);
-            }
+            disconnect_user(state, target, "You have been banned.");
+            send_global_admin_action(state, target);
         }
         "ban_device" => {
             if let Some(ref did) = device_id {
@@ -910,20 +1422,21 @@ fn handle_admin_action(
             }
         }
         "room_ban_user" => {
-            if !target.is_empty() {
-                state
-                    .room_banned_users
-                    .lock()
-                    .unwrap()
-                    .insert(target.to_string());
-                state.global_bans.lock().unwrap().push(GlobalBan {
-                    username: Some(target.to_string()),
-                    device_id: device_id.clone(),
-                    room_ban: true,
-                    reason: "Room banned by admin".into(),
-                });
-                send_global_admin_action(state, target);
+            if target.is_empty() {
+                return;
             }
+            state
+                .room_banned_users
+                .lock()
+                .unwrap()
+                .insert(target.to_string());
+            state.global_bans.lock().unwrap().push(GlobalBan {
+                username: Some(target.to_string()),
+                device_id: device_id.clone(),
+                room_ban: true,
+                reason: "Room banned by admin".into(),
+            });
+            send_global_admin_action(state, target);
         }
         "room_ban_device" => {
             if let Some(ref did) = device_id {
@@ -991,8 +1504,109 @@ fn handle_admin_action(
                 disconnect_user(state, target, "Kicked by admin.");
             }
         }
+        "rename_user" => {
+            if target.is_empty() {
+                return;
+            }
+            if let Some(ref new_name) = value {
+                admin_rename_user(state, target, new_name);
+            }
+        }
+        "rename_room" => {
+            if let (Some(ref gid), Some(ref name)) = (group_id.as_ref(), value.as_ref()) {
+                admin_rename_room(state, gid, name);
+            }
+        }
+        "transfer_owner" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_transfer_owner(state, gid, target);
+                }
+            }
+        }
+        "force_join_room" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_force_join_room(state, gid, target);
+                }
+            }
+        }
+        "add_to_room" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_ensure_member(state, gid, target);
+                }
+            }
+        }
+        "remove_from_room" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_remove_from_room(state, gid, target);
+                }
+            }
+        }
+        "kick_from_room" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_kick_from_room(state, gid, target);
+                }
+            }
+        }
+        "reset_invite" => {
+            if let Some(ref gid) = group_id {
+                admin_reset_invite(state, gid);
+            }
+        }
+        "clear_messages" => {
+            if let Some(ref gid) = group_id {
+                admin_clear_messages(state, gid, value.as_deref());
+            }
+        }
+        "room_mute" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_set_mod_mute(state, gid, target, true);
+                }
+            }
+        }
+        "room_unmute" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_set_mod_mute(state, gid, target, false);
+                }
+            }
+        }
+        "room_deafen" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_set_mod_deafen(state, gid, target, true);
+                }
+            }
+        }
+        "room_undeafen" => {
+            if let Some(ref gid) = group_id {
+                if !target.is_empty() {
+                    admin_set_mod_deafen(state, gid, target, false);
+                }
+            }
+        }
+        "room_timeout" => {
+            if let (Some(ref gid), Some(ref dur)) = (group_id.as_ref(), value.as_ref()) {
+                if !target.is_empty() {
+                    if let Ok(secs) = dur.parse::<u64>() {
+                        admin_timeout_member(state, gid, target, secs);
+                    }
+                }
+            }
+        }
+        "follow_user" => {
+            if !target.is_empty() {
+                admin_follow_user(state, conn_id, actor, target);
+            }
+        }
         _ => {}
     }
+    notify_admin_dashboards(state);
 }
 
 fn purge_expired_rooms(state: &AppState) {
@@ -1187,6 +1801,7 @@ fn delete_group(state: &AppState, group_id: &str) {
         state.mod_states.lock().unwrap().remove(group_id);
 
         broadcast(state, &ServerEvent::GroupDeleted { group_id: group_id.to_string() });
+        notify_admin_dashboards(state);
     }
 }
 
@@ -1263,6 +1878,12 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
             }
             let token = val.get("token").and_then(|t| t.as_str()).unwrap_or("");
             validate_admin_token(state, conn_id, token)
+        }
+        "AdminNavigate" => {
+            val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
+        }
+        "UsernameChanged" => {
+            val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
         }
         _ => true,
     }
@@ -1449,6 +2070,7 @@ async fn cleanup_conn(state: &AppState, conn_id: usize) {
     if let Some((gid, cid)) = old_channel {
         broadcast_channel_viewers(state, &gid, &cid);
     }
+    notify_admin_dashboards(state);
 }
 
 async fn handle_client_event(
@@ -1569,6 +2191,7 @@ async fn handle_client_event(
                         room_id,
                     },
                 );
+                notify_admin_dashboards(state);
             }
         }
         ClientEvent::Speaking { is_speaking } => {
@@ -1697,6 +2320,7 @@ async fn handle_client_event(
             target,
             device_id,
             group_id,
+            value,
         } => {
             if let Some(name) = current_username.clone() {
                 handle_admin_action(
@@ -1708,10 +2332,8 @@ async fn handle_client_event(
                     &target,
                     device_id,
                     group_id,
+                    value,
                 );
-                if let Some(dash) = build_admin_dashboard(state, conn_id, &name, &token) {
-                    send_to_user(state, &name, &dash);
-                }
             }
         }
     }
@@ -1820,6 +2442,7 @@ async fn join_user(
     broadcast_channel_viewers(state, HUB_ID, "general");
     send_mod_updates_for_user(state, &clean);
     send_global_admin_action(state, &clean);
+    notify_admin_dashboards(state);
 }
 
 fn send_group_list(state: &AppState, conn_id: usize, username: &str) {
@@ -1876,6 +2499,7 @@ fn send_chat(state: &AppState, name: &str, group_id: &str, channel_id: &str, tex
                 timestamp: ts,
             },
         );
+        notify_admin_dashboards(state);
     }
 }
 
@@ -1901,6 +2525,7 @@ async fn view_channel(
     if let Some(uname) = username {
         send_history(state, conn_id, uname, group_id, channel_id);
     }
+    notify_admin_dashboards(state);
 }
 
 async fn switch_group(
@@ -1942,6 +2567,7 @@ async fn switch_group(
     }
     send_history(state, conn_id, &uname, group_id, "general");
     broadcast_channel_viewers(state, group_id, "general");
+    notify_admin_dashboards(state);
 }
 
 fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
@@ -2002,6 +2628,7 @@ fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
             group: group_info(&id, &group),
         },
     );
+    notify_admin_dashboards(state);
 }
 
 fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &str, switch: bool) {
@@ -2051,6 +2678,7 @@ fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &st
         send_history(state, conn_id, username, &gid, "general");
         broadcast_channel_viewers(state, &gid, "general");
     }
+    notify_admin_dashboards(state);
 }
 
 fn online_in_group(state: &AppState, members: &HashSet<String>) -> usize {
