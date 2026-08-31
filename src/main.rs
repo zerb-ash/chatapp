@@ -1212,7 +1212,7 @@ fn admin_rename_user(state: &AppState, old: &str, new: &str) {
     if new.is_empty() || new.len() > 32 {
         return;
     }
-    let (conn_id, old_exact) = {
+    let Some((conn_id, old_exact)) = {
         let users = state.users.lock().unwrap();
         if users.values().any(|u| u.eq_ignore_ascii_case(new)) {
             return;
@@ -1221,8 +1221,7 @@ fn admin_rename_user(state: &AppState, old: &str, new: &str) {
             .iter()
             .find(|(_, u)| u.eq_ignore_ascii_case(old))
             .map(|(cid, u)| (*cid, u.clone()))
-    };
-    let Some((conn_id, old_exact)) = conn_id else {
+    } else {
         return;
     };
     if old_exact.eq_ignore_ascii_case(new) {
