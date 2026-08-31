@@ -52,10 +52,36 @@
             font-size: 13px;
         }
         .invite-link-box button:hover { background: #4752c4; }
-        .modal-actions { display: flex; gap: 8px; margin-top: 12px; }
-        .modal-actions button { flex: 1; }
-        .btn-secondary { background: #4e5058 !important; }
-        .btn-danger { background: #da373c !important; }
+        .modal-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+        .modal-actions button {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            color: #fff;
+        }
+        .modal-btn-primary { background: #5865f2; }
+        .modal-btn-primary:hover { background: #4752c4; }
+        .modal-btn-secondary { background: #4e5058; }
+        .modal-btn-secondary:hover { background: #6d6f78; }
+        .modal-btn-danger { background: #da373c; }
+        .modal-btn-danger:hover { background: #a1282b; }
+        .modal-box .modal-full-btn {
+            width: 100%;
+            padding: 10px 16px;
+            background: #5865f2;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .modal-box .modal-full-btn:hover { background: #4752c4; }
 
         /* Channel sidebar */
         #sidebar { width: 240px; background: #2b2d31; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -127,6 +153,34 @@
         .body a:hover { text-decoration: underline; }
         .body code { background: #2b2d31; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px; }
 
+        .invite-card {
+            display: flex;
+            align-items: stretch;
+            margin-top: 8px;
+            max-width: 432px;
+            background: #2b2d31;
+            border: 1px solid #1f2023;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .invite-card-accent { width: 4px; background: #5865f2; flex-shrink: 0; }
+        .invite-card-content { flex: 1; padding: 12px 16px 14px; min-width: 0; }
+        .invite-card-tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #949ba4; margin-bottom: 4px; }
+        .invite-card-name { font-size: 16px; font-weight: 600; color: #f2f3f5; margin-bottom: 2px; }
+        .invite-card-meta { font-size: 13px; color: #b5bac1; margin-bottom: 12px; }
+        .invite-card-join {
+            padding: 8px 14px;
+            background: #23a559;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .invite-card-join:hover { background: #1a7d43; }
+        .invite-card-join:disabled { background: #4e5058; cursor: not-allowed; }
+
         .input-container { padding: 0 16px 24px; position: relative; flex-shrink: 0; }
         #typing-indicator { position: absolute; top: -18px; left: 20px; font-size: 12px; color: #b5bac1; font-style: italic; min-height: 16px; }
         #image-preview-container { display: none; background: #383a40; padding: 8px 12px; border-radius: 8px 8px 0 0; align-items: center; gap: 12px; }
@@ -140,7 +194,7 @@
         /* Member list */
         #member-list { width: 240px; background: #2b2d31; flex-shrink: 0; overflow-y: auto; padding: 16px 8px; }
         .member-section-title { font-size: 12px; font-weight: 600; color: #949ba4; text-transform: uppercase; padding: 8px 8px 4px; }
-        .member-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; font-size: 15px; color: #949ba4; cursor: default; }
+        .member-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; font-size: 15px; color: #dbdee1; cursor: default; }
         .member-item:hover { background: #35373c; color: #dbdee1; }
         .member-avatar { width: 32px; height: 32px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
         .member-avatar .status-dot { position: absolute; bottom: -2px; right: -2px; width: 12px; height: 12px; background: #23a559; border: 3px solid #2b2d31; border-radius: 50%; }
@@ -151,12 +205,34 @@
 
         /* Modal & toast */
         #modal, .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
-        .modal-box { background: #313338; padding: 32px; border-radius: 8px; width: 100%; max-width: 480px; text-align: center; }
-        .modal-box h3 { color: #f2f3f5; margin-bottom: 8px; font-size: 24px; }
-        .modal-box p { color: #b5bac1; font-size: 14px; margin-bottom: 20px; }
-        .modal-box > input { width: 100%; padding: 10px; background: #1e1f22; border: none; border-radius: 4px; color: #dbdee1; margin-bottom: 16px; outline: none; font-size: 16px; }
-        .modal-box > button, .modal-box .modal-full-btn { width: 100%; padding: 12px; background: #5865f2; color: white; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 14px; }
-        .modal-box > button:hover, .modal-box .modal-full-btn:hover { background: #4752c4; }
+        .modal-box { background: #313338; padding: 24px; border-radius: 8px; width: 100%; max-width: 440px; }
+        .modal-box h3 { color: #f2f3f5; margin-bottom: 8px; font-size: 24px; font-weight: 700; text-align: center; }
+        .modal-box > p { color: #b5bac1; font-size: 14px; margin-bottom: 20px; text-align: center; line-height: 1.4; }
+        .modal-box > input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #1e1f22;
+            border: 1px solid #404249;
+            border-radius: 4px;
+            color: #dbdee1;
+            margin-bottom: 0;
+            outline: none;
+            font-size: 16px;
+        }
+        .modal-box > input:focus { border-color: #5865f2; }
+        .modal-box > button.join-btn {
+            width: 100%;
+            padding: 12px;
+            background: #5865f2;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+        .modal-box > button.join-btn:hover { background: #4752c4; }
         #error-msg { color: #f23f43; font-size: 13px; margin-bottom: 10px; display: none; }
 
         .toast-invite { position: fixed; bottom: 24px; right: 24px; background: #2b2d31; border-radius: 8px; padding: 16px; width: 320px; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; }
@@ -251,7 +327,7 @@
         <p>Enter a username to join the server.</p>
         <div id="error-msg"></div>
         <input id="username-input" type="text" placeholder="Username" autofocus maxlength="32" />
-        <button onclick="attemptJoin()">Continue</button>
+        <button class="join-btn" onclick="attemptJoin()">Continue</button>
     </div>
 </div>
 
@@ -270,8 +346,8 @@
         <p>Start your own chat room with dedicated voice channels.</p>
         <input id="new-group-name" type="text" placeholder="Room name" maxlength="48" />
         <div class="modal-actions">
-            <button class="btn-secondary" onclick="hideCreateGroupModal()">Cancel</button>
-            <button onclick="createGroup()">Create</button>
+            <button class="modal-btn-secondary" onclick="hideCreateGroupModal()">Cancel</button>
+            <button class="modal-btn-primary" onclick="createGroup()">Create</button>
         </div>
     </div>
 </div>
@@ -284,7 +360,10 @@
             <input id="invite-link-input" type="text" readonly />
             <button onclick="copyInviteLink()">Copy</button>
         </div>
-        <button class="modal-full-btn" onclick="hideInviteModal()">Done</button>
+        <div class="modal-actions">
+            <button class="modal-btn-secondary" onclick="hideInviteModal()">Done</button>
+            <button class="modal-btn-primary" onclick="shareInviteInChat()">Share in Chat</button>
+        </div>
     </div>
 </div>
 
@@ -293,10 +372,10 @@
         <h3 id="settings-title">Room Settings</h3>
         <p id="close-vote-status">Close votes: 0/0</p>
         <div class="modal-actions">
-            <button class="btn-secondary" onclick="voteCloseGroup(true)">Vote to Close</button>
-            <button class="btn-danger" id="btn-delete-group" onclick="deleteActiveGroup()">Delete Room</button>
+            <button class="modal-btn-secondary" onclick="voteCloseGroup(true)">Vote to Close</button>
+            <button class="modal-btn-danger" id="btn-delete-group" onclick="deleteActiveGroup()">Delete Room</button>
         </div>
-        <button style="margin-top:10px;" onclick="hideSettingsModal()">Cancel</button>
+        <button class="modal-full-btn" onclick="hideSettingsModal()">Close</button>
     </div>
 </div>
 
@@ -378,8 +457,6 @@
 <div id="member-list">
     <div class="member-section-title">In Channel — <span id="channel-user-count">0</span></div>
     <div id="channel-member-items"></div>
-    <div class="member-section-title" style="margin-top:12px;">Online — <span id="user-count">0</span></div>
-    <div id="member-items"></div>
 </div>
 
 <script>
@@ -416,6 +493,7 @@
     let channelViewers = {};
     let pendingGroupInvite = null;
     let joinViaInvite = false;
+    let invitePreviews = {};
     let closeVoteRequired = 0;
     let closeVoteCount = 0;
 
@@ -430,6 +508,47 @@
 
     function inviteLink(code) {
         return `${location.origin}${location.pathname}#invite=${code}`;
+    }
+
+    function joinGroupFromInvite(code) {
+        if (!code) return;
+        history.replaceState(null, "", location.pathname + location.search);
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            pendingGroupInvite = code;
+            if (!myUsername) document.getElementById("modal").style.display = "flex";
+            return;
+        }
+        joinViaInvite = true;
+        ws.send(JSON.stringify({ type: "JoinGroup", invite_code: code }));
+    }
+
+    function requestInvitePreview(code) {
+        if (invitePreviews[code] || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: "PreviewInvite", invite_code: code }));
+    }
+
+    function buildInviteEmbed(code) {
+        const p = invitePreviews[code];
+        const name = p ? (p.valid ? p.group_name : "Invalid Invite") : "Loading...";
+        const meta = p ? (p.valid ? `${p.member_count} Member${p.member_count !== 1 ? "s" : ""}` : "This invite may have expired") : "";
+        const disabled = p && !p.valid ? " disabled" : "";
+        return `<div class="invite-card" data-invite="${escapeHtml(code)}"><div class="invite-card-accent"></div><div class="invite-card-content"><div class="invite-card-tag">Room Invite</div><div class="invite-card-name">${escapeHtml(name)}</div><div class="invite-card-meta">${escapeHtml(meta)}</div><button type="button" class="invite-card-join${disabled}" data-invite="${escapeHtml(code)}">Join Room</button></div></div>`;
+    }
+
+    function refreshInviteCards() {
+        document.querySelectorAll(".invite-card[data-invite]").forEach(card => {
+            const code = card.dataset.invite;
+            const fresh = document.createElement("div");
+            fresh.innerHTML = buildInviteEmbed(code);
+            card.replaceWith(fresh.firstElementChild);
+        });
+    }
+
+    function shareInviteInChat() {
+        const g = getActiveGroup();
+        if (!g?.invite_code || !ws) return;
+        ws.send(JSON.stringify({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: inviteLink(g.invite_code) }));
+        hideInviteModal();
     }
 
     function notifyViewChannel() {
@@ -610,8 +729,7 @@
         renderServerRail();
         renderChannels();
         if (pendingGroupInvite) {
-            joinViaInvite = true;
-            ws.send(JSON.stringify({ type: "JoinGroup", invite_code: pendingGroupInvite }));
+            joinGroupFromInvite(pendingGroupInvite);
             pendingGroupInvite = null;
         }
     }
@@ -644,9 +762,9 @@
     };
 
     DOMPurify.setConfig({
-        ALLOWED_TAGS: ["b", "i", "em", "strong", "a", "code", "pre", "br", "p", "span", "img", "video", "ul", "ol", "li"],
-        ALLOWED_ATTR: ["href", "src", "controls", "class", "alt", "loading", "target", "rel"],
-        ALLOW_DATA_ATTR: false
+        ALLOWED_TAGS: ["b", "i", "em", "strong", "a", "code", "pre", "br", "p", "span", "img", "video", "ul", "ol", "li", "div", "button"],
+        ALLOWED_ATTR: ["href", "src", "controls", "class", "alt", "loading", "target", "rel", "data-invite", "type", "disabled"],
+        ALLOW_DATA_ATTR: true
     });
 
     // --- Discord-like VC sounds (Web Audio, no external files) ---
@@ -702,6 +820,16 @@
         const hash = window.location.hash;
         if (hash.startsWith("#room=")) pendingInviteRoom = hash.replace("#room=", "");
         if (hash.startsWith("#invite=")) pendingGroupInvite = hash.replace("#invite=", "");
+
+        window.addEventListener("hashchange", () => {
+            const h = window.location.hash;
+            if (h.startsWith("#invite=")) joinGroupFromInvite(h.replace("#invite=", ""));
+        });
+
+        document.getElementById("messages").addEventListener("click", (e) => {
+            const btn = e.target.closest(".invite-card-join");
+            if (btn && !btn.disabled) joinGroupFromInvite(btn.dataset.invite);
+        });
 
         if (savedUser) attemptJoin();
 
@@ -774,8 +902,10 @@
                     showError(event.error);
                     ws.close();
                     break;
-                case "UserList":
-                    updateMemberList(event.users);
+                case "InvitePreview":
+                    if (event.username !== myUsername) break;
+                    invitePreviews[event.invite_code] = event;
+                    refreshInviteCards();
                     break;
                 case "History":
                     if (event.username !== myUsername) break;
@@ -879,7 +1009,18 @@
         const initial = sender.charAt(0).toUpperCase();
 
         let safeText = escapeHtml(rawPlaintext);
+        const invitePlaceholders = {};
+        let inviteIdx = 0;
+        safeText = safeText.replace(/(?:https?:\/\/[^\s]*)?#invite=(inv-[a-z0-9]+)/gi, (_, code) => {
+            requestInvitePreview(code);
+            const key = `__INVITE_${inviteIdx++}__`;
+            invitePlaceholders[key] = code;
+            return key;
+        });
         let parsedHTML = marked.parse(safeText);
+        for (const [key, code] of Object.entries(invitePlaceholders)) {
+            parsedHTML = parsedHTML.replace(new RegExp(key, "g"), buildInviteEmbed(code));
+        }
         parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
         parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
         parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
@@ -899,13 +1040,9 @@
         box.scrollTop = box.scrollHeight;
     }
 
-    let onlineUsers = new Set();
-
-    function renderMemberCard(u, showInvite) {
-        const isSelf = u === myUsername;
+    function renderMemberCard(u) {
         const initial = u.charAt(0).toUpperCase();
-        const inviteBtn = showInvite && !isSelf ? `<button class="invite-btn" onclick="inviteUser('${escapeHtml(u)}')">Invite</button>` : "";
-        return `<div class="member-item"><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span>${inviteBtn}</div>`;
+        return `<div class="member-item"><div class="member-avatar">${initial}<span class="status-dot"></span></div><span class="member-name">${escapeHtml(u)}</span></div>`;
     }
 
     function updateChannelMembers(data) {
@@ -915,23 +1052,7 @@
         const box = document.getElementById("channel-member-items");
         box.innerHTML = "";
         (data.viewers || []).forEach(u => {
-            box.innerHTML += renderMemberCard(u, false);
-        });
-    }
-
-    function updateMemberList(users) {
-        onlineUsers.clear();
-        users.forEach(u => onlineUsers.add(u));
-
-        const g = getActiveGroup();
-        let show = activeGroupId === "hub" ? users : (g.members || []).filter(m => users.includes(m));
-        show = [...new Set(show)].sort((a, b) => a.localeCompare(b));
-
-        document.getElementById("user-count").textContent = show.length;
-        const container = document.getElementById("member-items");
-        container.innerHTML = "";
-        show.forEach(u => {
-            container.innerHTML += renderMemberCard(u, true);
+            box.innerHTML += renderMemberCard(u);
         });
     }
 

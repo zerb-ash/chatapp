@@ -112,6 +112,14 @@ enum ServerEvent {
     GroupCreated { group: GroupInfo },
     GroupUpdated { group: GroupInfo },
     GroupDeleted { group_id: String },
+    InvitePreview {
+        username: String,
+        invite_code: String,
+        group_id: String,
+        group_name: String,
+        member_count: usize,
+        valid: bool,
+    },
     ChannelViewers {
         group_id: String,
         channel_id: String,
@@ -146,6 +154,7 @@ enum ClientEvent {
     SwitchGroup { group_id: String },
     CreateGroup { name: String },
     JoinGroup { invite_code: String },
+    PreviewInvite { invite_code: String },
     DeleteGroup { group_id: String },
     VoteCloseGroup { group_id: String, agree: bool },
     CreateChannel {
@@ -485,7 +494,7 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
                     .unwrap_or(false)
             }
         }
-        "GroupList" => {
+        "GroupList" | "InvitePreview" => {
             val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
         }
         _ => true,
@@ -702,7 +711,12 @@ async fn handle_client_event(
         }
         ClientEvent::JoinGroup { invite_code } => {
             if let Some(name) = current_username.clone() {
-                join_group(state, conn_id, &name, &invite_code);
+                join_group(state, conn_id, &name, &invite_code, true);
+            }
+        }
+        ClientEvent::PreviewInvite { invite_code } => {
+            if let Some(name) = current_username.clone() {
+                preview_invite(state, conn_id, &name, &invite_code);
             }
         }
         ClientEvent::DeleteGroup { group_id } => {
@@ -1034,7 +1048,7 @@ fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
     );
 }
 
-fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &str) {
+fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &str, switch: bool) {
     let group_id = {
         let idx = state.invite_index.lock().unwrap();
         idx.get(invite_code).cloned()
@@ -1053,9 +1067,61 @@ fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &st
 
     if let Some(cs) = state.conn_states.lock().unwrap().get_mut(&conn_id) {
         cs.member_of.insert(gid.clone());
+        if switch {
+            cs.group_id = gid.clone();
+            cs.channel_id = "general".to_string();
+        }
     }
 
-    broadcast(state, &ServerEvent::GroupUpdated { group: updated });
+    broadcast(state, &ServerEvent::GroupUpdated { group: updated.clone() });
+
+    if switch {
+        send_history(state, conn_id, username, &gid, "general");
+        broadcast_channel_viewers(state, &gid, "general");
+    }
+}
+
+fn preview_invite(state: &AppState, conn_id: usize, username: &str, invite_code: &str) {
+    let idx = state.invite_index.lock().unwrap();
+    let group_id = idx.get(invite_code).cloned();
+    drop(idx);
+
+    let preview = if let Some(gid) = group_id {
+        let groups = state.groups.lock().unwrap();
+        if let Some(g) = groups.get(&gid) {
+            ServerEvent::InvitePreview {
+                username: username.to_string(),
+                invite_code: invite_code.to_string(),
+                group_id: gid,
+                group_name: g.name.clone(),
+                member_count: g.members.len(),
+                valid: true,
+            }
+        } else {
+            ServerEvent::InvitePreview {
+                username: username.to_string(),
+                invite_code: invite_code.to_string(),
+                group_id: String::new(),
+                group_name: String::new(),
+                member_count: 0,
+                valid: false,
+            }
+        }
+    } else {
+        ServerEvent::InvitePreview {
+            username: username.to_string(),
+            invite_code: invite_code.to_string(),
+            group_id: String::new(),
+            group_name: String::new(),
+            member_count: 0,
+            valid: false,
+        }
+    };
+
+    if let Ok(json) = serde_json::to_string(&preview) {
+        let _ = state.tx.send(json);
+    }
+    let _ = conn_id;
 }
 
 fn delete_group_by_owner(state: &AppState, username: &str, group_id: &str) {
