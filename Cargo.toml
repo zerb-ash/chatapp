@@ -1,0 +1,8 @@
+[package]
+name = "rust-chat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1.0", features = ["full"] }
