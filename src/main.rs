@@ -53,7 +53,6 @@ async fn main() {
         messages: Mutex::new(VecDeque::new()),
     });
 
-    // Background purge thread: Removes messages older than 24 hours (86,400s)
     let state_cleanup = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -387,7 +386,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let my_id = NEXT_USER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut my_username = String::new();
 
-    // 1. Initial Handshake & Username Uniqueness Validation
     while let Some(Ok(Message::Text(text))) = receiver.next().await {
         if let Ok(ClientEvent::Join { username }) = serde_json::from_str(&text) {
             let username_trimmed = username.trim().to_string();
@@ -421,7 +419,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     if my_username.is_empty() { return; }
 
-    // 2. Send 24-hour cached encrypted history
     let history = {
         let msgs = state.messages.lock().unwrap();
         msgs.iter().cloned().collect::<Vec<_>>()
@@ -429,7 +426,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let history_event = ServerEvent::History { messages: history };
     let _ = sender.send(Message::Text(serde_json::to_string(&history_event).unwrap())).await;
 
-    // Task A: Forward broadcast events to WS client
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             if sender.send(Message::Text(msg)).await.is_err() {
@@ -438,7 +434,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Task B: Receive incoming client actions (Messages & Typing Indicators)
     let state_clone = state.clone();
     let username_clone = my_username.clone();
     let mut recv_task = tokio::spawn(async move {
@@ -471,6 +466,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         let evt = ServerEvent::Typing { username: username_clone.clone(), is_typing };
                         let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
+                    ClientEvent::Join { .. } => {
+                        // Safely ignore post-handshake joins
+                    }
                 }
             }
         }
@@ -481,7 +479,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    // Cleanup user on disconnect
     {
         let mut users = state.users.lock().unwrap();
         users.remove(&my_id);
