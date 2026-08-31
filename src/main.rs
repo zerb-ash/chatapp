@@ -6,8 +6,9 @@ use axum::{
 };
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, AeadCore, Nonce, Key
+    Aes256Gcm, Nonce, Key
 };
+use aes_gcm::aead::rand_core::RngCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use pbkdf2::pbkdf2_hmac;
@@ -978,7 +979,7 @@ async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> impl IntoResp
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
-    let conn_id = rand::random::<usize>();
+    let conn_id = OsRng.next_u64() as usize;
     let mut current_username: Option<String> = None;
 
     let mut rx = state.tx.subscribe();
