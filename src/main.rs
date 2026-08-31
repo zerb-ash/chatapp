@@ -82,7 +82,7 @@ fn derive_global_cipher() -> Aes256Gcm {
 async fn main() {
     let cipher = derive_global_cipher();
     let (tx, _) = broadcast::channel::<String>(200);
-    
+
     let state = Arc::new(AppState {
         tx,
         users: Mutex::new(HashMap::new()),
@@ -129,16 +129,16 @@ async fn index() -> Html<&'static str> {
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; }
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #313338; color: #dbdee1; display: flex; height: 100vh; overflow: hidden; }
-            
+
             #sidebar { width: 260px; background: #2b2d31; display: flex; flex-direction: column; border-right: 1px solid #1f2023; }
             .sidebar-header { padding: 16px; font-weight: bold; color: #f2f5f7; border-bottom: 1px solid #1f2023; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
-            
+
             .vc-section { padding: 12px 8px; border-bottom: 1px solid #1f2023; overflow-y: auto; max-height: 40vh; }
             .vc-title { font-size: 11px; font-weight: bold; color: #949ba4; text-transform: uppercase; margin-bottom: 8px; padding-left: 8px; }
             .vc-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 4px; color: #949ba4; cursor: pointer; font-size: 14px; margin-bottom: 2px; }
             .vc-item:hover { background: #35373c; color: #dbdee1; }
             .vc-item.active { background: #404249; color: #fff; }
-            
+
             .vc-delete-btn { opacity: 0.6; cursor: pointer; padding: 2px 4px; border-radius: 3px; }
             .vc-delete-btn:hover { opacity: 1; background: #da373c; }
 
@@ -172,7 +172,7 @@ async fn index() -> Html<&'static str> {
             .avatar { width: 40px; height: 40px; border-radius: 50%; background: #5865f2; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; }
             .hover-time { font-size: 10px; color: #949ba4; opacity: 0; width: 40px; text-align: right; line-height: 22px; user-select: none; }
             .msg-group:hover .hover-time { opacity: 1; }
-            
+
             .msg-content { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
             .msg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
             .username { font-weight: 600; color: #f2f5f7; font-size: 15px; }
@@ -187,7 +187,7 @@ async fn index() -> Html<&'static str> {
             #video-grid video { height: 100%; border-radius: 6px; background: #000; object-fit: contain; }
 
             .input-container { padding: 0 20px 20px 20px; position: relative; }
-            
+
             #image-preview-container { display: none; background: #2b2d31; padding: 8px 12px; border-radius: 8px 8px 0 0; border-bottom: 1px solid #383a40; align-items: center; gap: 12px; }
             #image-preview { height: 60px; max-width: 120px; border-radius: 4px; object-fit: cover; border: 1px solid #404249; }
             .remove-img-btn { background: #da373c; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
@@ -213,7 +213,7 @@ async fn index() -> Html<&'static str> {
             .toast-btns button { flex: 1; padding: 8px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 12px; }
             .btn-accept { background: #23a55a; color: white; }
             .btn-decline { background: #da373c; color: white; }
-            
+
             #remote-audio-container { display: none; }
         </style>
     </head>
@@ -242,7 +242,7 @@ async fn index() -> Html<&'static str> {
 
         <div id="sidebar">
             <div class="sidebar-header">Channels & Voice</div>
-            
+
             <div class="vc-section">
                 <div class="vc-title">Voice Channels</div>
                 <div id="vc-general" class="vc-item" onclick="toggleVoiceChannel('general')">
@@ -267,13 +267,13 @@ async fn index() -> Html<&'static str> {
             <div class="chat-header">
                 <span id="channel-title"># general</span>
             </div>
-            
+
             <div id="video-grid"></div>
             <div id="messages"></div>
 
             <div class="input-container">
                 <div id="typing-indicator"></div>
-                
+
                 <div id="image-preview-container">
                     <img id="image-preview" src="" alt="Pasted Image Preview" />
                     <button class="remove-img-btn" onclick="clearPastedImage()" title="Remove attached image">✕</button>
@@ -289,19 +289,19 @@ async fn index() -> Html<&'static str> {
         <script>
             let ws;
             let myUsername = "";
-        
+
             let activeTypers = new Set();
             let typingTimeout = null;
             let pastedImageDataUrl = null;
-        
+
             let lastMsgSender = null;
             let lastMsgTimestamp = 0;
-        
+
             let currentRoom = null;
             let localStream = null;
             let localScreenStream = null;
             let peerConnections = {};
-            let iceQueues = {}; 
+            let iceQueues = {};
             let roomMembers = {};
             let knownPrivateRooms = new Set();
             let audioAnalyzers = {};
@@ -309,31 +309,85 @@ async fn index() -> Html<&'static str> {
             let pendingInviteRoom = null;
             let isMuted = false;
             let isDeafened = false;
-        
+
             const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        
+
+            // --- Client-side decryption ---------------------------------------------
+            // The server encrypts every chat message with AES-256-GCM using a key
+            // derived (PBKDF2-SHA256, 100k iterations) from a fixed global passphrase
+            // and salt. This mirrors that derivation with SubtleCrypto so the browser
+            // can turn `ciphertext` + `iv` back into readable text.
+            const GLOBAL_PASSPHRASE = "RUSTCORD_SERVER_GLOBAL_SECRET_KEY";
+            const GLOBAL_SALT = "rust_cord_secure_salt_2026";
+
+            const cryptoKeyPromise = deriveGlobalKey();
+
+            async function deriveGlobalKey() {
+                const enc = new TextEncoder();
+                const baseKey = await crypto.subtle.importKey(
+                    "raw",
+                    enc.encode(GLOBAL_PASSPHRASE),
+                    "PBKDF2",
+                    false,
+                    ["deriveKey"]
+                );
+                return crypto.subtle.deriveKey(
+                    {
+                        name: "PBKDF2",
+                        salt: enc.encode(GLOBAL_SALT),
+                        iterations: 100000,
+                        hash: "SHA-256"
+                    },
+                    baseKey,
+                    { name: "AES-GCM", length: 256 },
+                    false,
+                    ["decrypt"]
+                );
+            }
+
+            function b64ToBytes(b64) {
+                const bin = atob(b64);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                return bytes;
+            }
+
+            async function decryptMessage(ciphertextB64, ivB64) {
+                try {
+                    const key = await cryptoKeyPromise;
+                    const ciphertext = b64ToBytes(ciphertextB64);
+                    const iv = b64ToBytes(ivB64);
+                    const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+                    return new TextDecoder().decode(plainBuf);
+                } catch (e) {
+                    console.error("Failed to decrypt message:", e);
+                    return "[Unable to decrypt message]";
+                }
+            }
+            // ---------------------------------------------------------------------------
+
             DOMPurify.setConfig({
                 ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'code', 'pre', 'br', 'p', 'span', 'img', 'video', 'ul', 'ol', 'li'],
                 ALLOWED_ATTR: ['href', 'src', 'controls', 'class', 'alt', 'loading', 'target', 'rel'],
                 ALLOW_DATA_ATTR: false
             });
-        
+
             window.addEventListener('DOMContentLoaded', () => {
                 const savedUser = localStorage.getItem('rc_username');
                 if (savedUser) document.getElementById('username-input').value = savedUser;
-        
+
                 const hash = window.location.hash;
                 if (hash.startsWith('#room=')) {
                     pendingInviteRoom = hash.replace('#room=', '');
                 }
-        
+
                 if (savedUser) {
                     attemptJoin();
                 }
-        
+
                 document.getElementById('message-input').addEventListener('paste', handleClipboardPaste);
             });
-        
+
             function handleClipboardPaste(e) {
                 const items = (e.clipboardData || e.originalEvent.clipboardData).items;
                 for (let item of items) {
@@ -350,81 +404,81 @@ async fn index() -> Html<&'static str> {
                     }
                 }
             }
-        
+
             function showImagePreview(dataUrl) {
                 const container = document.getElementById('image-preview-container');
                 const img = document.getElementById('image-preview');
                 const boxWrapper = document.getElementById('input-box-wrapper');
-                
+
                 img.src = dataUrl;
                 container.style.display = 'flex';
                 boxWrapper.classList.add('has-preview');
             }
-        
+
             function clearPastedImage() {
                 pastedImageDataUrl = null;
                 const container = document.getElementById('image-preview-container');
                 const img = document.getElementById('image-preview');
                 const boxWrapper = document.getElementById('input-box-wrapper');
-        
+
                 img.src = "";
                 container.style.display = 'none';
                 boxWrapper.classList.remove('has-preview');
             }
-        
+
             async function attemptJoin() {
                 const userVal = document.getElementById('username-input').value.trim();
                 const errorDiv = document.getElementById('error-msg');
                 errorDiv.style.display = 'none';
-        
+
                 if (!userVal) {
                     showError("Username is required!");
                     return;
                 }
-        
+
                 myUsername = userVal;
-        
+
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${location.host}/ws`);
-        
+
                 ws.onopen = () => {
                     ws.send(JSON.stringify({ type: "Join", username: myUsername }));
                 };
-        
+
                 ws.onmessage = async (e) => {
                     const event = JSON.parse(e.data);
-        
+
                     if (event.type === 'JoinSuccess') {
                         localStorage.setItem('rc_username', myUsername);
-        
+
                         document.getElementById('modal').style.display = 'none';
                         const msgInput = document.getElementById('message-input');
                         msgInput.disabled = false;
                         msgInput.focus();
-        
+
                         if (pendingInviteRoom) {
                             addPrivateRoom(pendingInviteRoom);
                             joinVoiceRoom(pendingInviteRoom);
                         }
-                    } 
+                    }
                     else if (event.type === 'JoinError') {
                         showError(event.error);
                         ws.close();
-                    } 
+                    }
                     else if (event.type === 'UserList') {
                         updateUserList(event.users);
-                    } 
+                    }
                     else if (event.type === 'History') {
                         document.getElementById('messages').innerHTML = '';
                         lastMsgSender = null;
                         lastMsgTimestamp = 0;
                         for (let msg of event.messages) {
-                            renderMessage(msg);
+                            await renderMessage(msg);
                         }
-                    } 
+                    }
                     else if (event.type === 'Message') {
-                        renderMessage(event);
-                    } 
+                        await renderMessage(event);
+                    }
                     else if (event.type === 'Typing') {
                         handleTypingEvent(event.username, event.is_typing);
                     }
@@ -445,56 +499,56 @@ async fn index() -> Html<&'static str> {
                     }
                 };
             }
-        
+
             function showError(msg) {
                 const errorDiv = document.getElementById('error-msg');
                 errorDiv.innerText = msg;
                 errorDiv.style.display = 'block';
             }
-        
+
             function send() {
                 const input = document.getElementById('message-input');
                 let rawText = input.value.trim();
-        
+
                 if (pastedImageDataUrl) {
                     rawText += (rawText ? "\n" : "") + `![Attached Image](${pastedImageDataUrl})`;
                 }
-        
+
                 if (!rawText || !ws) return;
-        
+
                 notifyTyping(false);
                 ws.send(JSON.stringify({
                     type: "Send",
                     text: rawText
                 }));
-        
+
                 input.value = '';
                 clearPastedImage();
             }
-        
-            function renderMessage(msg) {
+
+            async function renderMessage(msg) {
                 const box = document.getElementById('messages');
-                const rawPlaintext = msg.ciphertext;
+                const rawPlaintext = await decryptMessage(msg.ciphertext, msg.iv);
                 const sender = msg.username || 'Anonymous';
                 const initial = sender.charAt(0).toUpperCase();
-        
+
                 let safeText = escapeHtml(rawPlaintext);
                 let parsedHTML = marked.parse(safeText);
-        
+
                 parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
                 parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
                 parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
-        
+
                 const cleanBody = DOMPurify.sanitize(parsedHTML);
-        
+
                 const msgDate = new Date(msg.timestamp * 1000);
                 const timeStr = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
+
                 const isGrouped = (sender === lastMsgSender) && ((msg.timestamp - lastMsgTimestamp) < 300);
-        
+
                 lastMsgSender = sender;
                 lastMsgTimestamp = msg.timestamp;
-        
+
                 if (isGrouped) {
                     box.innerHTML += `
                         <div class="msg-group grouped">
@@ -514,10 +568,10 @@ async fn index() -> Html<&'static str> {
                             </div>
                         </div>`;
                 }
-        
+
                 box.scrollTop = box.scrollHeight;
             }
-        
+
             function updateUserList(users) {
                 const list = document.getElementById('user-list');
                 document.getElementById('user-count').innerText = users.length;
@@ -536,14 +590,14 @@ async fn index() -> Html<&'static str> {
                     `;
                 });
             }
-        
+
             function addPrivateRoom(roomId) {
                 if (knownPrivateRooms.has(roomId)) return;
                 knownPrivateRooms.add(roomId);
-        
+
                 const container = document.getElementById('private-rooms-list');
                 const shortName = roomId.length > 12 ? roomId.substring(0, 10) + '...' : roomId;
-        
+
                 const wrapper = document.createElement('div');
                 wrapper.id = `vc-wrapper-${roomId}`;
                 wrapper.innerHTML = `
@@ -569,6 +623,12 @@ async fn index() -> Html<&'static str> {
                 knownPrivateRooms.delete(roomId);
                 const elem = document.getElementById(`vc-wrapper-${roomId}`);
                 if (elem) elem.remove();
+
+                // Clean up any stale roster entries pointing at the deleted room
+                Object.keys(roomMembers).forEach(user => {
+                    if (roomMembers[user] === roomId) delete roomMembers[user];
+                });
+                renderVCRosters();
             }
 
             async function toggleVoiceChannel(roomName) {
@@ -608,7 +668,7 @@ async fn index() -> Html<&'static str> {
 
                 Object.keys(roomMembers).forEach(targetUser => {
                     if (targetUser !== myUsername && roomMembers[targetUser] === currentRoom) {
-                        createPeerConnection(targetUser, true);
+                        createPeerConnection(targetUser);
                     }
                 });
 
@@ -666,7 +726,7 @@ async fn index() -> Html<&'static str> {
                 }
 
                 if (currentRoom && roomId === currentRoom && username !== myUsername) {
-                    createPeerConnection(username, true);
+                    createPeerConnection(username);
                 }
 
                 renderVCRosters();
@@ -722,7 +782,7 @@ async fn index() -> Html<&'static str> {
                         const { analyzer } = audioAnalyzers[user];
                         const data = new Uint8Array(analyzer.frequencyBinCount);
                         analyzer.getByteFrequencyData(data);
-                        
+
                         let sum = 0;
                         for (let i = 0; i < data.length; i++) sum += data[i];
                         const avg = sum / data.length;
@@ -741,10 +801,26 @@ async fn index() -> Html<&'static str> {
                 audioAnalyzers = {};
             }
 
-            function createPeerConnection(targetUser, isInitiator) {
+            // --- WebRTC peer connections (perfect negotiation) ------------------------
+            // Two peers can both try to join around the same time. The old code always
+            // made *both* sides "initiators" of their connection to each other, so both
+            // called createOffer() simultaneously — an offer/offer collision that made
+            // setRemoteDescription throw and silently kill audio for everyone whenever a
+            // 2nd+ person was in a room. This uses the standard "perfect negotiation"
+            // pattern: politeness is decided deterministically per pair (by username
+            // comparison) and negotiation is *always* listened for on both sides, so
+            // adding a track later (e.g. screen share) also renegotiates correctly,
+            // regardless of who started the connection.
+            function isPolite(targetUser) {
+                return myUsername > targetUser;
+            }
+
+            function createPeerConnection(targetUser) {
                 if (peerConnections[targetUser]) return peerConnections[targetUser];
 
                 const pc = new RTCPeerConnection(rtcConfig);
+                pc.makingOffer = false;
+                pc.polite = isPolite(targetUser);
                 peerConnections[targetUser] = pc;
                 iceQueues[targetUser] = [];
 
@@ -789,47 +865,72 @@ async fn index() -> Html<&'static str> {
                     }
                 };
 
-                if (isInitiator) {
-                    pc.onnegotiationneeded = async () => {
-                        try {
-                            const offer = await pc.createOffer();
-                            await pc.setLocalDescription(offer);
-                            sendVoiceSignal(targetUser, { sdp: pc.localDescription });
-                        } catch (err) { console.error(err); }
-                    };
-                }
+                // Attached unconditionally on every connection (not just an "initiator"
+                // flag) so renegotiation — e.g. starting a screen share after the call is
+                // already up — works no matter which side adds the new track.
+                pc.onnegotiationneeded = async () => {
+                    try {
+                        pc.makingOffer = true;
+                        await pc.setLocalDescription();
+                        sendVoiceSignal(targetUser, { sdp: pc.localDescription });
+                    } catch (err) {
+                        console.error("Negotiation error:", err);
+                    } finally {
+                        pc.makingOffer = false;
+                    }
+                };
 
                 return pc;
             }
 
             async function handleVoiceSignal(fromUser, signal) {
-                let pc = peerConnections[fromUser] || createPeerConnection(fromUser, false);
+                let pc = peerConnections[fromUser] || createPeerConnection(fromUser);
 
                 if (signal.sdp) {
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-                    
+                    const description = signal.sdp;
+                    const offerCollision = description.type === 'offer' &&
+                        (pc.makingOffer || pc.signalingState !== 'stable');
+
+                    const ignoreOffer = !pc.polite && offerCollision;
+                    if (ignoreOffer) return;
+
+                    try {
+                        if (offerCollision) {
+                            // Polite side: roll back our own offer and accept theirs instead.
+                            await Promise.all([
+                                pc.setLocalDescription({ type: 'rollback' }),
+                                pc.setRemoteDescription(new RTCSessionDescription(description))
+                            ]);
+                        } else {
+                            await pc.setRemoteDescription(new RTCSessionDescription(description));
+                        }
+                    } catch (err) {
+                        console.error("setRemoteDescription failed:", err);
+                        return;
+                    }
+
                     if (iceQueues[fromUser]) {
                         while (iceQueues[fromUser].length > 0) {
                             const cand = iceQueues[fromUser].shift();
-                            await pc.addIceCandidate(cand);
+                            try { await pc.addIceCandidate(cand); } catch (e) { console.error(e); }
                         }
                     }
 
-                    if (signal.sdp.type === 'offer') {
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
+                    if (description.type === 'offer') {
+                        await pc.setLocalDescription();
                         sendVoiceSignal(fromUser, { sdp: pc.localDescription });
                     }
                 } else if (signal.candidate) {
                     const candidate = new RTCIceCandidate(signal.candidate);
                     if (pc.remoteDescription && pc.remoteDescription.type) {
-                        await pc.addIceCandidate(candidate);
+                        try { await pc.addIceCandidate(candidate); } catch (e) { console.error(e); }
                     } else {
                         if (!iceQueues[fromUser]) iceQueues[fromUser] = [];
                         iceQueues[fromUser].push(candidate);
                     }
                 }
             }
+            // ---------------------------------------------------------------------------
 
             function sendVoiceSignal(target, signal) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
@@ -890,6 +991,8 @@ async fn index() -> Html<&'static str> {
                     }
                     localVid.srcObject = localScreenStream;
 
+                    // addTrack fires onnegotiationneeded on this pc (now attached on every
+                    // connection), so the remote side gets a proper renegotiated offer.
                     Object.values(peerConnections).forEach(pc => {
                         localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                     });
@@ -1127,9 +1230,29 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             }
                         }
                         ClientEvent::DeleteVoiceRoom { room_id } => {
+                            // Fix: previously this only dropped the room's members from
+                            // server-side voice_states without telling *their* clients
+                            // they'd been removed, leaving those clients still holding
+                            // mic/peer state for a room that no longer exists anywhere
+                            // else. Now every evicted user gets an explicit
+                            // VoiceStateUpdate{room_id: None} so their own client tears
+                            // down its local state too.
                             let mut voice_states = state_recv_task.voice_states.lock().unwrap();
+                            let removed_users: Vec<String> = voice_states
+                                .iter()
+                                .filter(|(_, r)| **r == room_id)
+                                .map(|(u, _)| u.clone())
+                                .collect();
                             voice_states.retain(|_, r| r != &room_id);
                             drop(voice_states);
+
+                            for u in removed_users {
+                                let vs_event = ServerEvent::VoiceStateUpdate {
+                                    username: u,
+                                    room_id: None,
+                                };
+                                let _ = state_recv_task.tx.send(serde_json::to_string(&vs_event).unwrap());
+                            }
 
                             let del_event = ServerEvent::DeleteVoiceRoom { room_id };
                             let _ = state_recv_task.tx.send(serde_json::to_string(&del_event).unwrap());
