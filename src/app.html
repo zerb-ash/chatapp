@@ -12,8 +12,28 @@
 
         /* Server rail */
         #server-rail { width: 72px; background: #1e1f22; display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 8px; flex-shrink: 0; }
-        .server-icon { width: 48px; height: 48px; border-radius: 50%; background: #5865f2; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; cursor: pointer; transition: border-radius 0.15s, background 0.15s; }
+        .server-icon { width: 48px; height: 48px; border-radius: 50%; background: #5865f2; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; cursor: pointer; transition: border-radius 0.15s, background 0.15s; flex-shrink: 0; }
         .server-icon:hover, .server-icon.active { border-radius: 16px; background: #4752c4; }
+        .server-icon.add-server { background: #313338; color: #23a559; font-size: 28px; font-weight: 400; }
+        .server-icon.add-server:hover { background: #23a559; color: #fff; }
+        #server-icons { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; overflow-y: auto; width: 100%; }
+        .header-actions { display: flex; gap: 4px; }
+        .icon-btn { background: transparent; border: none; color: #b5bac1; cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
+        .icon-btn:hover { background: #35373c; color: #fff; }
+        .mini-add { background: transparent; border: none; color: #949ba4; cursor: pointer; font-size: 14px; padding: 0 4px; }
+        .mini-add:hover { color: #dbdee1; }
+        .viewer-count { margin-left: auto; font-size: 13px; color: #949ba4; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+        .channel-viewers { margin-left: auto; font-size: 11px; color: #949ba4; opacity: 0; }
+        .channel-item:hover .channel-viewers, .channel-item.active .channel-viewers { opacity: 1; }
+        .close-vote-bar { background: #2b2d31; border-top: 1px solid #1f2023; padding: 8px 12px; font-size: 12px; color: #949ba4; }
+        .close-vote-bar button { margin-top: 6px; width: 100%; padding: 6px; background: #5865f2; border: none; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 600; font-size: 12px; }
+        .invite-link-box { display: flex; gap: 6px; margin: 12px 0; }
+        .invite-link-box input { flex: 1; padding: 8px; background: #1e1f22; border: none; border-radius: 4px; color: #dbdee1; font-size: 13px; }
+        .invite-link-box button { padding: 8px 12px; background: #5865f2; border: none; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 600; }
+        .modal-actions { display: flex; gap: 8px; margin-top: 12px; }
+        .modal-actions button { flex: 1; }
+        .btn-secondary { background: #4e5058 !important; }
+        .btn-danger { background: #da373c !important; }
 
         /* Channel sidebar */
         #sidebar { width: 240px; background: #2b2d31; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -108,7 +128,7 @@
         .invite-btn:hover { background: #4752c4; }
 
         /* Modal & toast */
-        #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        #modal, .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal-box { background: #313338; padding: 32px; border-radius: 8px; width: 400px; text-align: center; }
         .modal-box h3 { color: #f2f3f5; margin-bottom: 8px; font-size: 24px; }
         .modal-box p { color: #b5bac1; font-size: 14px; margin-bottom: 20px; }
@@ -222,30 +242,71 @@
     </div>
 </div>
 
+<div id="create-group-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+        <h3>Create a Room</h3>
+        <p>Start your own chat room with dedicated voice channels.</p>
+        <input id="new-group-name" type="text" placeholder="Room name" maxlength="48" />
+        <div class="modal-actions">
+            <button class="btn-secondary" onclick="hideCreateGroupModal()">Cancel</button>
+            <button onclick="createGroup()">Create</button>
+        </div>
+    </div>
+</div>
+
+<div id="invite-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+        <h3>Invite People</h3>
+        <p>Share this link so others can join your room.</p>
+        <div class="invite-link-box">
+            <input id="invite-link-input" type="text" readonly />
+            <button onclick="copyInviteLink()">Copy</button>
+        </div>
+        <button onclick="hideInviteModal()">Done</button>
+    </div>
+</div>
+
+<div id="settings-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+        <h3 id="settings-title">Room Settings</h3>
+        <p id="close-vote-status">Close votes: 0/0</p>
+        <div class="modal-actions">
+            <button class="btn-secondary" onclick="voteCloseGroup(true)">Vote to Close</button>
+            <button class="btn-danger" id="btn-delete-group" onclick="deleteActiveGroup()">Delete Room</button>
+        </div>
+        <button style="margin-top:10px;" onclick="hideSettingsModal()">Cancel</button>
+    </div>
+</div>
+
 <div id="server-rail">
-    <div class="server-icon active" title="Nimbus">N</div>
+    <div id="server-icons"></div>
+    <div class="server-icon add-server" onclick="showCreateGroupModal()" title="Create room">+</div>
 </div>
 
 <div id="sidebar">
     <div class="server-header">
-        <span>Nimbus</span>
-    </div>
-
-    <div class="channel-section">
-        <div class="section-title">Text Channels</div>
-        <div class="channel-item active" id="text-general">
-            <span class="hash">#</span> general
+        <span id="active-group-name">Nimbus</span>
+        <div class="header-actions">
+            <button class="icon-btn" id="btn-invite" onclick="showInviteModal()" title="Invite link">🔗</button>
+            <button class="icon-btn" id="btn-settings" onclick="showGroupSettings()" title="Settings">⚙</button>
         </div>
     </div>
 
-    <div class="channel-section" style="flex:1; overflow-y:auto;">
-        <div class="section-title">Voice Channels</div>
-        <div id="vc-general" class="channel-item voice" onclick="toggleVoiceChannel('general')">
-            <span>🔊</span> General VC
-            <span class="vc-pill">Connected</span>
+    <div id="channels-scroll" style="flex:1;overflow-y:auto;">
+        <div class="channel-section">
+            <div class="section-title">Text Channels <button class="mini-add" id="btn-add-text" onclick="promptNewChannel('text')">+</button></div>
+            <div id="text-channels"></div>
         </div>
-        <ul id="roster-general" class="vc-roster"></ul>
+        <div class="channel-section">
+            <div class="section-title">Voice Channels <button class="mini-add" id="btn-add-voice" onclick="promptNewChannel('voice')">+</button></div>
+            <div id="voice-channels"></div>
+        </div>
         <div id="private-rooms-list"></div>
+    </div>
+
+    <div id="close-vote-bar" class="close-vote-bar" style="display:none;">
+        <span id="close-vote-text">0 members voted to close</span>
+        <button onclick="voteCloseGroup(true)">Vote to Close Room</button>
     </div>
 
     <div id="user-panel">
@@ -266,6 +327,7 @@
     <div class="chat-header">
         <span class="hash">#</span>
         <span id="channel-title">general</span>
+        <span class="viewer-count" id="header-viewer-count">👁 0</span>
     </div>
 
     <div id="video-stage">
@@ -324,6 +386,218 @@
     let isDeafened = false;
     let isScreenSharing = false;
     let fsUserId = null;
+    let activeGroupId = "hub";
+    let activeChannelId = "general";
+    let groups = {};
+    let channelViewers = {};
+    let pendingGroupInvite = null;
+    let joinViaInvite = false;
+    let closeVoteRequired = 0;
+    let closeVoteCount = 0;
+
+    function vcRoomId(groupId, channelId) { return `${groupId}:${channelId}`; }
+
+    function getActiveGroup() {
+        if (activeGroupId === "hub") {
+            return { id: "hub", name: "Nimbus", owner: "system", invite_code: "", text_channels: [{ id: "general", name: "general", kind: "text" }], voice_channels: [{ id: "general", name: "General VC", kind: "voice" }], members: [], close_votes: [] };
+        }
+        return groups[activeGroupId];
+    }
+
+    function inviteLink(code) {
+        return `${location.origin}${location.pathname}#invite=${code}`;
+    }
+
+    function notifyViewChannel() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: "ViewChannel", group_id: activeGroupId, channel_id: activeChannelId }));
+    }
+
+    function updateViewerDisplay() {
+        const key = `${activeGroupId}:${activeChannelId}`;
+        const count = channelViewers[key] || 0;
+        document.getElementById("header-viewer-count").textContent = `👁 ${count}`;
+        const el = document.getElementById(`viewers-text-${activeChannelId}`);
+        if (el) el.textContent = `👁 ${count}`;
+    }
+
+    function renderServerRail() {
+        const box = document.getElementById("server-icons");
+        box.innerHTML = "";
+        const hub = document.createElement("div");
+        hub.className = "server-icon" + (activeGroupId === "hub" ? " active" : "");
+        hub.title = "Nimbus";
+        hub.textContent = "N";
+        hub.onclick = () => switchGroup("hub");
+        box.appendChild(hub);
+        Object.values(groups).forEach(g => {
+            const el = document.createElement("div");
+            el.className = "server-icon" + (activeGroupId === g.id ? " active" : "");
+            el.title = g.name;
+            el.textContent = g.name.charAt(0).toUpperCase();
+            el.onclick = () => switchGroup(g.id);
+            box.appendChild(el);
+        });
+    }
+
+    function renderChannels() {
+        const g = getActiveGroup();
+        if (!g) return;
+        document.getElementById("active-group-name").textContent = g.name;
+        const isOwner = g.owner === myUsername;
+        const isCustom = activeGroupId !== "hub";
+        document.getElementById("btn-invite").style.display = isCustom && g.invite_code ? "block" : "none";
+        document.getElementById("btn-settings").style.display = isCustom ? "block" : "none";
+        document.getElementById("btn-add-text").style.display = isOwner ? "inline" : "none";
+        document.getElementById("btn-add-voice").style.display = isOwner ? "inline" : "none";
+        document.getElementById("close-vote-bar").style.display = isCustom ? "block" : "none";
+
+        const textBox = document.getElementById("text-channels");
+        textBox.innerHTML = "";
+        g.text_channels.forEach(ch => {
+            const key = `${activeGroupId}:${ch.id}`;
+            const count = channelViewers[key] || 0;
+            const div = document.createElement("div");
+            div.className = "channel-item" + (activeChannelId === ch.id ? " active" : "");
+            div.id = `text-${ch.id}`;
+            div.innerHTML = `<span class="hash">#</span> ${escapeHtml(ch.name)}<span class="channel-viewers" id="viewers-text-${ch.id}">👁 ${count}</span>`;
+            div.onclick = () => selectTextChannel(ch.id, ch.name);
+            textBox.appendChild(div);
+        });
+
+        const voiceBox = document.getElementById("voice-channels");
+        voiceBox.innerHTML = "";
+        g.voice_channels.forEach(ch => {
+            const room = vcRoomId(activeGroupId, ch.id);
+            const div = document.createElement("div");
+            div.className = "channel-item voice" + (currentRoom === room ? " connected active" : "");
+            div.id = `vc-${activeGroupId}-${ch.id}`;
+            div.dataset.room = room;
+            div.innerHTML = `<span>🔊</span> ${escapeHtml(ch.name)}<span class="vc-pill">Connected</span>`;
+            div.onclick = () => toggleVoiceChannel(room);
+            voiceBox.appendChild(div);
+            const roster = document.createElement("ul");
+            roster.id = `roster-${room}`;
+            roster.className = "vc-roster";
+            voiceBox.appendChild(roster);
+        });
+        renderVCRosters();
+        updateViewerDisplay();
+        updateVcUI();
+    }
+
+    function selectTextChannel(channelId, name) {
+        activeChannelId = channelId;
+        document.getElementById("channel-title").textContent = name;
+        document.getElementById("message-input").placeholder = `Message #${name}`;
+        document.getElementById("messages").innerHTML = "";
+        lastMsgSender = null;
+        lastMsgTimestamp = 0;
+        notifyViewChannel();
+        renderChannels();
+    }
+
+    function switchGroup(groupId) {
+        if (currentRoom && !currentRoom.startsWith(groupId + ":") && !currentRoom.startsWith("priv-")) {
+            leaveVoiceChannel(true);
+        }
+        activeGroupId = groupId;
+        activeChannelId = "general";
+        document.getElementById("messages").innerHTML = "";
+        lastMsgSender = null;
+        lastMsgTimestamp = 0;
+        document.getElementById("channel-title").textContent = "general";
+        document.getElementById("message-input").placeholder = "Message #general";
+        renderServerRail();
+        renderChannels();
+        notifyViewChannel();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "SwitchGroup", group_id: groupId }));
+        }
+    }
+
+    function showCreateGroupModal() { document.getElementById("create-group-modal").style.display = "flex"; }
+    function hideCreateGroupModal() { document.getElementById("create-group-modal").style.display = "none"; }
+
+    function createGroup() {
+        const name = document.getElementById("new-group-name").value.trim();
+        if (!name || !ws) return;
+        ws.send(JSON.stringify({ type: "CreateGroup", name }));
+        document.getElementById("new-group-name").value = "";
+        hideCreateGroupModal();
+    }
+
+    function showInviteModal() {
+        const g = getActiveGroup();
+        if (!g || !g.invite_code) return;
+        document.getElementById("invite-link-input").value = inviteLink(g.invite_code);
+        document.getElementById("invite-modal").style.display = "flex";
+    }
+    function hideInviteModal() { document.getElementById("invite-modal").style.display = "none"; }
+
+    function copyInviteLink() {
+        const input = document.getElementById("invite-link-input");
+        input.select();
+        navigator.clipboard.writeText(input.value).catch(() => {});
+    }
+
+    function showGroupSettings() {
+        if (activeGroupId === "hub") return;
+        const g = getActiveGroup();
+        document.getElementById("settings-title").textContent = g.name + " Settings";
+        document.getElementById("close-vote-status").textContent = `Close votes: ${closeVoteCount}/${closeVoteRequired} (unanimous required)`;
+        document.getElementById("btn-delete-group").style.display = g.owner === myUsername ? "block" : "none";
+        document.getElementById("settings-modal").style.display = "flex";
+    }
+    function hideSettingsModal() { document.getElementById("settings-modal").style.display = "none"; }
+
+    function deleteActiveGroup() {
+        if (!ws || activeGroupId === "hub") return;
+        if (confirm("Delete this room for everyone?")) {
+            ws.send(JSON.stringify({ type: "DeleteGroup", group_id: activeGroupId }));
+            hideSettingsModal();
+        }
+    }
+
+    function voteCloseGroup(agree) {
+        if (!ws || activeGroupId === "hub") return;
+        ws.send(JSON.stringify({ type: "VoteCloseGroup", group_id: activeGroupId, agree }));
+        hideSettingsModal();
+    }
+
+    function promptNewChannel(kind) {
+        const name = prompt(kind === "voice" ? "Voice channel name:" : "Text channel name:");
+        if (!name || !ws) return;
+        ws.send(JSON.stringify({ type: "CreateChannel", group_id: activeGroupId, name, kind }));
+    }
+
+    function ingestGroup(g) {
+        groups[g.id] = g;
+        if (g.id === activeGroupId) {
+            closeVoteRequired = g.members.length;
+            closeVoteCount = (g.close_votes || []).length;
+            document.getElementById("close-vote-text").textContent = `${closeVoteCount}/${closeVoteRequired} voted to close`;
+        }
+    }
+
+    function handleGroupList(list) {
+        groups = {};
+        list.forEach(g => { if (g.id !== "hub") groups[g.id] = g; });
+        renderServerRail();
+        renderChannels();
+        if (pendingGroupInvite) {
+            joinViaInvite = true;
+            ws.send(JSON.stringify({ type: "JoinGroup", invite_code: pendingGroupInvite }));
+            pendingGroupInvite = null;
+        }
+    }
+
+    function handleGroupDeleted(groupId) {
+        delete groups[groupId];
+        if (currentRoom && currentRoom.startsWith(groupId + ":")) leaveVoiceChannel(true);
+        if (activeGroupId === groupId) switchGroup("hub");
+        else renderServerRail();
+    }
 
     const rtcConfig = {
         iceServers: [
@@ -403,6 +677,7 @@
 
         const hash = window.location.hash;
         if (hash.startsWith("#room=")) pendingInviteRoom = hash.replace("#room=", "");
+        if (hash.startsWith("#invite=")) pendingGroupInvite = hash.replace("#invite=", "");
 
         if (savedUser) attemptJoin();
 
@@ -467,6 +742,9 @@
                         addPrivateRoom(pendingInviteRoom);
                         await joinVoiceRoom(pendingInviteRoom);
                     }
+                    renderServerRail();
+                    renderChannels();
+                    notifyViewChannel();
                     break;
                 case "JoinError":
                     showError(event.error);
@@ -477,16 +755,17 @@
                     break;
                 case "History":
                     if (event.username !== myUsername) break;
+                    if (event.group_id !== activeGroupId || event.channel_id !== activeChannelId) break;
                     document.getElementById("messages").innerHTML = "";
                     lastMsgSender = null;
                     lastMsgTimestamp = 0;
                     for (const msg of event.messages) renderMessage(msg);
                     break;
                 case "Message":
-                    renderMessage(event);
+                    if (event.group_id === activeGroupId && event.channel_id === activeChannelId) renderMessage(event);
                     break;
                 case "Typing":
-                    handleTypingEvent(event.username, event.is_typing);
+                    if (event.group_id === activeGroupId && event.channel_id === activeChannelId) handleTypingEvent(event.username, event.is_typing);
                     break;
                 case "VoiceSignal":
                     if (event.target === myUsername) handleVoiceSignal(event.from, event.signal);
@@ -509,6 +788,39 @@
                 case "DeleteVoiceRoom":
                     handleDeleteVoiceRoom(event.room_id);
                     break;
+                case "GroupList":
+                    if (event.username !== myUsername) break;
+                    handleGroupList(event.groups);
+                    break;
+                case "GroupCreated":
+                    ingestGroup(event.group);
+                    renderServerRail();
+                    switchGroup(event.group.id);
+                    break;
+                case "GroupUpdated":
+                    ingestGroup(event.group);
+                    renderServerRail();
+                    renderChannels();
+                    if (joinViaInvite && event.group.members.includes(myUsername)) {
+                        joinViaInvite = false;
+                        switchGroup(event.group.id);
+                    }
+                    break;
+                case "GroupDeleted":
+                    handleGroupDeleted(event.group_id);
+                    break;
+                case "ChannelViewers":
+                    channelViewers[`${event.group_id}:${event.channel_id}`] = event.count;
+                    updateViewerDisplay();
+                    renderChannels();
+                    break;
+                case "CloseVoteUpdate":
+                    if (event.group_id === activeGroupId) {
+                        closeVoteRequired = event.required;
+                        closeVoteCount = event.votes.length;
+                        document.getElementById("close-vote-text").textContent = `${closeVoteCount}/${closeVoteRequired} voted to close`;
+                    }
+                    break;
             }
         };
 
@@ -530,7 +842,7 @@
         if (!rawText || !ws) return;
 
         notifyTyping(false);
-        ws.send(JSON.stringify({ type: "Send", text: rawText }));
+        ws.send(JSON.stringify({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: rawText }));
         input.value = "";
         clearPastedImage();
     }
@@ -563,10 +875,12 @@
     }
 
     function updateMemberList(users) {
-        document.getElementById("user-count").textContent = users.length;
+        const g = getActiveGroup();
+        const show = activeGroupId === "hub" ? users : (g.members || []).filter(m => users.includes(m));
+        document.getElementById("user-count").textContent = show.length;
         const container = document.getElementById("member-items");
         container.innerHTML = "";
-        users.forEach(u => {
+        show.forEach(u => {
             const isSelf = u === myUsername;
             const initial = u.charAt(0).toUpperCase();
             const inviteBtn = isSelf ? "" : `<button class="invite-btn" onclick="inviteUser('${escapeHtml(u)}')">Invite</button>`;
@@ -613,8 +927,11 @@
 
     function updateVcUI() {
         const inVc = !!currentRoom;
-        document.getElementById("vc-general").classList.toggle("connected", inVc && currentRoom === "general");
-        document.getElementById("vc-general").classList.toggle("active", inVc && currentRoom === "general");
+        document.querySelectorAll("#voice-channels .channel-item.voice").forEach(el => {
+            const room = el.dataset.room;
+            el.classList.toggle("connected", inVc && currentRoom === room);
+            el.classList.toggle("active", inVc && currentRoom === room);
+        });
         knownPrivateRooms.forEach(id => {
             const item = document.getElementById(`vc-item-${id}`);
             if (item) {
@@ -624,7 +941,12 @@
         });
         const statusEl = document.getElementById("panel-vc-status");
         if (inVc) {
-            statusEl.textContent = "In voice: " + (currentRoom === "general" ? "General VC" : currentRoom);
+            let label = currentRoom;
+            if (currentRoom.includes(":")) {
+                const parts = currentRoom.split(":");
+                label = parts[parts.length - 1];
+            }
+            statusEl.textContent = "In voice: " + label;
             statusEl.classList.add("connected");
         } else {
             statusEl.textContent = "Not in voice";
@@ -702,7 +1024,7 @@
     function handleVoiceStateUpdate(username, roomId) {
         if (roomId) {
             roomMembers[username] = roomId;
-            if (roomId !== "general") addPrivateRoom(roomId);
+            if (roomId.startsWith("priv-")) addPrivateRoom(roomId);
         } else {
             delete roomMembers[username];
             removeVideoTile(username);
@@ -728,20 +1050,16 @@
     }
 
     function renderVCRosters() {
-        document.getElementById("roster-general").innerHTML = "";
-        knownPrivateRooms.forEach(rId => {
-            const roster = document.getElementById(`roster-${rId}`);
-            if (roster) roster.innerHTML = "";
-        });
-
+        document.querySelectorAll(".vc-roster").forEach(r => { r.innerHTML = ""; });
         Object.keys(roomMembers).forEach(user => {
             const room = roomMembers[user];
             const initial = user.charAt(0).toUpperCase();
             const li = document.createElement("li");
             li.className = "vc-user";
-            li.id = `vc-user-${user}`;
+            li.id = `vc-user-${user}-${room}`;
             li.innerHTML = `<div class="vc-user-avatar" id="avatar-${user}">${initial}</div><span>${escapeHtml(user)}</span>`;
-            const targetRoster = room === "general" ? document.getElementById("roster-general") : document.getElementById(`roster-${room}`);
+            let targetRoster = document.getElementById(`roster-${room}`);
+            if (!targetRoster && room.includes(":")) targetRoster = document.getElementById(`roster-${room}`);
             if (targetRoster) targetRoster.appendChild(li);
         });
     }
@@ -1233,7 +1551,7 @@
 
     function notifyTyping(isTyping) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "Typing", is_typing: isTyping }));
+            ws.send(JSON.stringify({ type: "Typing", group_id: activeGroupId, channel_id: activeChannelId, is_typing: isTyping }));
         }
     }
 
