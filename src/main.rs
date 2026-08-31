@@ -25,6 +25,9 @@ const GLOBAL_SALT: &[u8] = b"rust_cord_secure_salt_2026";
 const HUB_ID: &str = "hub";
 const MAX_MSGS_PER_CHANNEL: usize = 200;
 const BROADCAST_CAP: usize = 8192;
+const ROOM_TTL_SECS: u64 = 86400;
+const ADMIN_SESSION_SECS: u64 = 600;
+const DEFAULT_ADMIN_PASSWORD: &str = "1234";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct StoredMessage {
@@ -46,6 +49,35 @@ struct ChannelInfo {
     id: String,
     name: String,
     kind: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct AdminUserRow {
+    username: String,
+    device_id: String,
+    group_id: String,
+    channel_id: String,
+    in_voice: bool,
+    globally_muted: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct AdminRoomRow {
+    id: String,
+    name: String,
+    owner: String,
+    members: usize,
+    active_members: usize,
+    age_secs: u64,
+    message_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct AdminBanRow {
+    username: String,
+    device_id: String,
+    room_ban: bool,
+    reason: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -145,12 +177,41 @@ enum ServerEvent {
         force_deafened: bool,
         timeout_until: u64,
     },
+    AdminAuthResult {
+        username: String,
+        success: bool,
+        expires_at: u64,
+        token: String,
+    },
+    AdminDashboard {
+        username: String,
+        expires_at: u64,
+        token: String,
+        active_users: Vec<AdminUserRow>,
+        lifetime_user_count: usize,
+        total_rooms: usize,
+        inactive_rooms: usize,
+        total_messages: u64,
+        uptime_secs: u64,
+        rooms: Vec<AdminRoomRow>,
+        bans: Vec<AdminBanRow>,
+    },
+    GlobalAdminAction {
+        username: String,
+        globally_muted: bool,
+        room_banned: bool,
+        banned: bool,
+        reason: String,
+    },
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ClientEvent {
-    Join { username: String },
+    Join {
+        username: String,
+        device_id: String,
+    },
     Send {
         group_id: String,
         channel_id: String,
@@ -198,6 +259,15 @@ enum ClientEvent {
         target: String,
         duration_secs: u64,
     },
+    AdminAuth { password: String },
+    AdminRefresh { token: String },
+    AdminAction {
+        token: String,
+        action: String,
+        target: String,
+        device_id: Option<String>,
+        group_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -213,11 +283,20 @@ struct ChatGroup {
     messages: HashMap<String, VecDeque<StoredMessage>>,
 }
 
+#[derive(Clone, Debug)]
+struct GlobalBan {
+    username: Option<String>,
+    device_id: Option<String>,
+    room_ban: bool,
+    reason: String,
+}
+
 #[derive(Clone, Debug, Default)]
 struct ConnState {
     username: String,
     group_id: String,
     channel_id: String,
+    device_id: String,
     member_of: HashSet<String>,
 }
 
@@ -228,8 +307,16 @@ struct ModState {
     timeout_until: u64,
 }
 
+#[derive(Clone, Debug)]
+struct AdminSession {
+    token: String,
+    expires_at: u64,
+}
+
 struct AppState {
     tx: broadcast::Sender<String>,
+    started_at: u64,
+    admin_password: String,
     users: Mutex<HashMap<usize, String>>,
     user_conns: Mutex<HashMap<String, usize>>,
     conn_states: Mutex<HashMap<usize, ConnState>>,
@@ -238,6 +325,14 @@ struct AppState {
     invite_index: Mutex<HashMap<String, String>>,
     mod_states: Mutex<HashMap<String, HashMap<String, ModState>>>,
     hub_messages: Mutex<HashMap<String, VecDeque<StoredMessage>>>,
+    lifetime_users: Mutex<HashSet<String>>,
+    total_messages: Mutex<u64>,
+    global_bans: Mutex<Vec<GlobalBan>>,
+    global_mutes: Mutex<HashSet<String>>,
+    room_banned_users: Mutex<HashSet<String>>,
+    room_banned_devices: Mutex<HashSet<String>>,
+    admin_sessions: Mutex<HashMap<usize, AdminSession>>,
+    admin_auth_fails: Mutex<HashMap<usize, (u32, u64)>>,
     cipher: Aes256Gcm,
 }
 
@@ -509,6 +604,412 @@ fn timeout_member(state: &AppState, actor: &str, group_id: &str, target: &str, d
     send_mod_update(state, group_id, target);
 }
 
+fn secure_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn admin_password() -> String {
+    std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| DEFAULT_ADMIN_PASSWORD.to_string())
+}
+
+fn is_admin_session(state: &AppState, conn_id: usize) -> bool {
+    let now = now_secs();
+    state
+        .admin_sessions
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|s| s.expires_at > now)
+        .unwrap_or(false)
+}
+
+fn validate_admin_token(state: &AppState, conn_id: usize, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let now = now_secs();
+    state
+        .admin_sessions
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|s| s.expires_at > now && secure_eq(&s.token, token))
+        .unwrap_or(false)
+}
+
+fn grant_admin_session(state: &AppState, conn_id: usize) -> (u64, String) {
+    let exp = now_secs() + ADMIN_SESSION_SECS;
+    let token = rand_token("tok-", 24);
+    state.admin_sessions.lock().unwrap().insert(
+        conn_id,
+        AdminSession {
+            token: token.clone(),
+            expires_at: exp,
+        },
+    );
+    state.admin_auth_fails.lock().unwrap().remove(&conn_id);
+    (exp, token)
+}
+
+fn admin_auth_locked(state: &AppState, conn_id: usize) -> bool {
+    let now = now_secs();
+    state
+        .admin_auth_fails
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|(_, until)| *until > now)
+        .unwrap_or(false)
+}
+
+fn record_admin_auth_fail(state: &AppState, conn_id: usize) {
+    let now = now_secs();
+    let mut fails = state.admin_auth_fails.lock().unwrap();
+    let entry = fails.entry(conn_id).or_insert((0, 0));
+    entry.0 += 1;
+    if entry.0 >= 5 {
+        entry.1 = now + 300;
+        entry.0 = 0;
+    }
+}
+
+fn revoke_admin_session(state: &AppState, conn_id: usize) {
+    state.admin_sessions.lock().unwrap().remove(&conn_id);
+}
+
+fn ban_reason(state: &AppState, username: &str, device_id: &str) -> Option<String> {
+    for ban in state.global_bans.lock().unwrap().iter() {
+        let user_match = ban
+            .username
+            .as_ref()
+            .map(|u| u.eq_ignore_ascii_case(username))
+            .unwrap_or(false);
+        let device_match = ban
+            .device_id
+            .as_ref()
+            .map(|d| d == device_id)
+            .unwrap_or(false);
+        if user_match || device_match {
+            return Some(ban.reason.clone());
+        }
+    }
+    None
+}
+
+fn is_room_banned(state: &AppState, username: &str, device_id: &str) -> bool {
+    state
+        .room_banned_users
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|u| u.eq_ignore_ascii_case(username))
+        || state.room_banned_devices.lock().unwrap().contains(device_id)
+}
+
+fn is_globally_muted(state: &AppState, username: &str) -> bool {
+    state
+        .global_mutes
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|u| u.eq_ignore_ascii_case(username))
+}
+
+fn send_global_admin_action(state: &AppState, username: &str) {
+    let device_id = state
+        .user_conns
+        .lock()
+        .unwrap()
+        .get(username)
+        .and_then(|cid| {
+            state
+                .conn_states
+                .lock()
+                .unwrap()
+                .get(cid)
+                .map(|c| c.device_id.clone())
+        })
+        .unwrap_or_default();
+    let banned = ban_reason(state, username, &device_id).is_some();
+    send_to_user(
+        state,
+        username,
+        &ServerEvent::GlobalAdminAction {
+            username: username.to_string(),
+            globally_muted: is_globally_muted(state, username),
+            room_banned: is_room_banned(state, username, &device_id),
+            banned,
+            reason: ban_reason(state, username, &device_id).unwrap_or_default(),
+        },
+    );
+}
+
+fn disconnect_user(state: &AppState, username: &str, reason: &str) {
+    send_to_user(
+        state,
+        username,
+        &ServerEvent::JoinError {
+            error: reason.to_string(),
+        },
+    );
+}
+
+fn count_group_messages(g: &ChatGroup) -> usize {
+    g.messages.values().map(|q| q.len()).sum()
+}
+
+fn active_members_in_group(state: &AppState, members: &HashSet<String>) -> usize {
+    state
+        .users
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|u| members.contains(*u))
+        .count()
+}
+
+fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token: &str) -> Option<ServerEvent> {
+    if !validate_admin_token(state, conn_id, token) {
+        return None;
+    }
+    let expires_at = state
+        .admin_sessions
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|s| s.expires_at)?;
+    let now = now_secs();
+    let voice = state.voice_states.lock().unwrap().clone();
+    let global_mutes = state.global_mutes.lock().unwrap().clone();
+
+    let active_users: Vec<AdminUserRow> = state
+        .conn_states
+        .lock()
+        .unwrap()
+        .values()
+        .map(|c| AdminUserRow {
+            username: c.username.clone(),
+            device_id: c.device_id.clone(),
+            group_id: c.group_id.clone(),
+            channel_id: c.channel_id.clone(),
+            in_voice: voice.contains_key(&c.username),
+            globally_muted: global_mutes
+                .iter()
+                .any(|u| u.eq_ignore_ascii_case(&c.username)),
+        })
+        .collect();
+
+    let groups = state.groups.lock().unwrap();
+    let online = state.users.lock().unwrap().values().cloned().collect::<HashSet<_>>();
+    let mut rooms = Vec::new();
+    let mut inactive_rooms = 0usize;
+    for (id, g) in groups.iter() {
+        let active = g.members.iter().filter(|m| online.contains(*m)).count();
+        if active == 0 {
+            inactive_rooms += 1;
+        }
+        rooms.push(AdminRoomRow {
+            id: id.clone(),
+            name: g.name.clone(),
+            owner: g.owner.clone(),
+            members: g.members.len(),
+            active_members: active,
+            age_secs: now.saturating_sub(g.created_at),
+            message_count: count_group_messages(g),
+        });
+    }
+    let total_rooms = rooms.len();
+    drop(groups);
+
+    let bans: Vec<AdminBanRow> = state
+        .global_bans
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| AdminBanRow {
+            username: b.username.clone().unwrap_or_default(),
+            device_id: b.device_id.clone().unwrap_or_default(),
+            room_ban: b.room_ban,
+            reason: b.reason.clone(),
+        })
+        .collect();
+
+    Some(ServerEvent::AdminDashboard {
+        username: username.to_string(),
+        expires_at,
+        token: token.to_string(),
+        active_users,
+        lifetime_user_count: state.lifetime_users.lock().unwrap().len(),
+        total_rooms,
+        inactive_rooms,
+        total_messages: *state.total_messages.lock().unwrap(),
+        uptime_secs: now.saturating_sub(state.started_at),
+        rooms,
+        bans,
+    })
+}
+
+fn handle_admin_action(
+    state: &AppState,
+    conn_id: usize,
+    token: &str,
+    actor: &str,
+    action: &str,
+    target: &str,
+    device_id: Option<String>,
+    group_id: Option<String>,
+) {
+    if !validate_admin_token(state, conn_id, token) {
+        return;
+    }
+    let target = target.trim();
+    if target.is_empty() && device_id.is_none() {
+        return;
+    }
+
+    match action {
+        "ban_user" => {
+            state.global_bans.lock().unwrap().push(GlobalBan {
+                username: Some(target.to_string()),
+                device_id: device_id.clone(),
+                room_ban: false,
+                reason: "Banned by admin".into(),
+            });
+            if !target.is_empty() {
+                disconnect_user(state, target, "You have been banned.");
+                send_global_admin_action(state, target);
+            }
+        }
+        "ban_device" => {
+            if let Some(ref did) = device_id {
+                state.global_bans.lock().unwrap().push(GlobalBan {
+                    username: None,
+                    device_id: Some(did.clone()),
+                    room_ban: false,
+                    reason: "Device banned by admin".into(),
+                });
+                let victims: Vec<String> = state
+                    .conn_states
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|c| c.device_id == *did)
+                    .map(|c| c.username.clone())
+                    .collect();
+                for u in victims {
+                    disconnect_user(&state, &u, "This device has been banned.");
+                    send_global_admin_action(&state, &u);
+                }
+            }
+        }
+        "room_ban_user" => {
+            if !target.is_empty() {
+                state
+                    .room_banned_users
+                    .lock()
+                    .unwrap()
+                    .insert(target.to_string());
+                state.global_bans.lock().unwrap().push(GlobalBan {
+                    username: Some(target.to_string()),
+                    device_id: device_id.clone(),
+                    room_ban: true,
+                    reason: "Room banned by admin".into(),
+                });
+                send_global_admin_action(state, target);
+            }
+        }
+        "room_ban_device" => {
+            if let Some(ref did) = device_id {
+                state.room_banned_devices.lock().unwrap().insert(did.clone());
+                state.global_bans.lock().unwrap().push(GlobalBan {
+                    username: None,
+                    device_id: Some(did.clone()),
+                    room_ban: true,
+                    reason: "Device room-banned by admin".into(),
+                });
+                let victims: Vec<String> = state
+                    .conn_states
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|c| c.device_id == *did)
+                    .map(|c| c.username.clone())
+                    .collect();
+                for u in victims {
+                    send_global_admin_action(&state, &u);
+                }
+            }
+        }
+        "global_mute" => {
+            if !target.is_empty() {
+                state.global_mutes.lock().unwrap().insert(target.to_string());
+                send_global_admin_action(state, target);
+            }
+        }
+        "global_unmute" => {
+            if !target.is_empty() {
+                state.global_mutes.lock().unwrap().remove(target);
+                send_global_admin_action(state, target);
+            }
+        }
+        "unban_user" => {
+            if !target.is_empty() {
+                state.global_bans.lock().unwrap().retain(|b| {
+                    b.username
+                        .as_ref()
+                        .map(|u| !u.eq_ignore_ascii_case(target))
+                        .unwrap_or(true)
+                });
+                state.room_banned_users.lock().unwrap().remove(target);
+                send_global_admin_action(state, target);
+            }
+        }
+        "unban_device" => {
+            if let Some(ref did) = device_id {
+                state.global_bans.lock().unwrap().retain(|b| {
+                    b.device_id.as_ref().map(|d| d != did).unwrap_or(true)
+                });
+                state.room_banned_devices.lock().unwrap().remove(did);
+            }
+        }
+        "delete_room" => {
+            if let Some(ref gid) = group_id {
+                if gid != HUB_ID {
+                    delete_group(state, gid);
+                }
+            }
+        }
+        "kick_user" => {
+            if !target.is_empty() {
+                disconnect_user(state, target, "Kicked by admin.");
+            }
+        }
+        _ => {}
+    }
+}
+
+fn purge_expired_rooms(state: &AppState) {
+    let now = now_secs();
+    let expired: Vec<String> = state
+        .groups
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, g)| now.saturating_sub(g.created_at) >= ROOM_TTL_SECS)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in expired {
+        delete_group(state, &id);
+    }
+}
+
 fn group_info(id: &str, g: &ChatGroup) -> GroupInfo {
     GroupInfo {
         id: id.to_string(),
@@ -683,6 +1184,8 @@ fn delete_group(state: &AppState, group_id: &str) {
             }
         }
 
+        state.mod_states.lock().unwrap().remove(group_id);
+
         broadcast(state, &ServerEvent::GroupDeleted { group_id: group_id.to_string() });
     }
 }
@@ -748,8 +1251,18 @@ fn should_send_event(state: &AppState, conn_id: usize, val: &serde_json::Value) 
                     .unwrap_or(false)
             }
         }
-        "GroupList" | "InvitePreview" | "KickedFromGroup" | "ModUpdate" => {
+        "GroupList" | "InvitePreview" | "KickedFromGroup" | "ModUpdate" | "GlobalAdminAction" => {
             val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
+        }
+        "AdminAuthResult" => {
+            val.get("username").and_then(|t| t.as_str()) == Some(my_name.as_str())
+        }
+        "AdminDashboard" => {
+            if val.get("username").and_then(|t| t.as_str()) != Some(my_name.as_str()) {
+                return false;
+            }
+            let token = val.get("token").and_then(|t| t.as_str()).unwrap_or("");
+            validate_admin_token(state, conn_id, token)
         }
         _ => true,
     }
@@ -765,8 +1278,16 @@ async fn main() {
     let mut hub = HashMap::new();
     hub.insert("general".to_string(), VecDeque::new());
 
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let admin_password = admin_password();
+
     let state = Arc::new(AppState {
         tx,
+        started_at,
+        admin_password,
         users: Mutex::new(HashMap::new()),
         user_conns: Mutex::new(HashMap::new()),
         conn_states: Mutex::new(HashMap::new()),
@@ -775,6 +1296,14 @@ async fn main() {
         invite_index: Mutex::new(HashMap::new()),
         mod_states: Mutex::new(HashMap::new()),
         hub_messages: Mutex::new(hub),
+        lifetime_users: Mutex::new(HashSet::new()),
+        total_messages: Mutex::new(0),
+        global_bans: Mutex::new(Vec::new()),
+        global_mutes: Mutex::new(HashSet::new()),
+        room_banned_users: Mutex::new(HashSet::new()),
+        room_banned_devices: Mutex::new(HashSet::new()),
+        admin_sessions: Mutex::new(HashMap::new()),
+        admin_auth_fails: Mutex::new(HashMap::new()),
         cipher,
     });
 
@@ -798,6 +1327,8 @@ async fn main() {
                     q.retain(|m| now.saturating_sub(m.timestamp) < 86400);
                 }
             }
+            drop(groups);
+            purge_expired_rooms(&state_cleanup);
         }
     });
 
@@ -890,6 +1421,8 @@ async fn cleanup_conn(state: &AppState, conn_id: usize) {
     let mut users = state.users.lock().unwrap();
     let username = users.remove(&conn_id);
     state.conn_states.lock().unwrap().remove(&conn_id);
+    state.admin_sessions.lock().unwrap().remove(&conn_id);
+    state.admin_auth_fails.lock().unwrap().remove(&conn_id);
     drop(users);
 
     if let Some(username) = username {
@@ -925,7 +1458,9 @@ async fn handle_client_event(
     ev: ClientEvent,
 ) {
     match ev {
-        ClientEvent::Join { username } => join_user(state, conn_id, current_username, username).await,
+        ClientEvent::Join { username, device_id } => {
+            join_user(state, conn_id, current_username, username, device_id).await;
+        }
         ClientEvent::Send {
             group_id,
             channel_id,
@@ -1110,6 +1645,75 @@ async fn handle_client_event(
                 timeout_member(state, &name, &group_id, &target, duration_secs);
             }
         }
+        ClientEvent::AdminAuth { password } => {
+            if let Some(name) = current_username.clone() {
+                if admin_auth_locked(state, conn_id) {
+                    send_to_user(
+                        state,
+                        &name,
+                        &ServerEvent::AdminAuthResult {
+                            username: name.clone(),
+                            success: false,
+                            expires_at: 0,
+                            token: String::new(),
+                        },
+                    );
+                    return;
+                }
+                let ok = secure_eq(&password, &state.admin_password);
+                let (exp, token) = if ok {
+                    grant_admin_session(state, conn_id)
+                } else {
+                    record_admin_auth_fail(state, conn_id);
+                    (0, String::new())
+                };
+                send_to_user(
+                    state,
+                    &name,
+                    &ServerEvent::AdminAuthResult {
+                        username: name.clone(),
+                        success: ok,
+                        expires_at: exp,
+                        token: token.clone(),
+                    },
+                );
+                if ok {
+                    if let Some(dash) = build_admin_dashboard(state, conn_id, &name, &token) {
+                        send_to_user(state, &name, &dash);
+                    }
+                }
+            }
+        }
+        ClientEvent::AdminRefresh { token } => {
+            if let Some(name) = current_username.clone() {
+                if let Some(dash) = build_admin_dashboard(state, conn_id, &name, &token) {
+                    send_to_user(state, &name, &dash);
+                }
+            }
+        }
+        ClientEvent::AdminAction {
+            token,
+            action,
+            target,
+            device_id,
+            group_id,
+        } => {
+            if let Some(name) = current_username.clone() {
+                handle_admin_action(
+                    state,
+                    conn_id,
+                    &token,
+                    &name,
+                    &action,
+                    &target,
+                    device_id,
+                    group_id,
+                );
+                if let Some(dash) = build_admin_dashboard(state, conn_id, &name, &token) {
+                    send_to_user(state, &name, &dash);
+                }
+            }
+        }
     }
 }
 
@@ -1118,13 +1722,33 @@ async fn join_user(
     conn_id: usize,
     current_username: &mut Option<String>,
     username: String,
+    device_id: String,
 ) {
     let clean = username.trim().to_string();
+    let device_id = device_id.trim().to_string();
     if clean.is_empty() {
         broadcast(
             state,
             &ServerEvent::JoinError {
                 error: "Username cannot be empty!".to_string(),
+            },
+        );
+        return;
+    }
+    if device_id.is_empty() {
+        broadcast(
+            state,
+            &ServerEvent::JoinError {
+                error: "Invalid session.".to_string(),
+            },
+        );
+        return;
+    }
+    if let Some(reason) = ban_reason(state, &clean, &device_id) {
+        broadcast(
+            state,
+            &ServerEvent::JoinError {
+                error: format!("Banned: {reason}"),
             },
         );
         return;
@@ -1142,6 +1766,7 @@ async fn join_user(
         }
     }
 
+    state.lifetime_users.lock().unwrap().insert(clean.clone());
     state.users.lock().unwrap().insert(conn_id, clean.clone());
     state.user_conns.lock().unwrap().insert(clean.clone(), conn_id);
     *current_username = Some(clean.clone());
@@ -1162,6 +1787,7 @@ async fn join_user(
             username: clean.clone(),
             group_id: HUB_ID.into(),
             channel_id: "general".into(),
+            device_id: device_id.clone(),
             member_of,
         },
     );
@@ -1193,6 +1819,7 @@ async fn join_user(
 
     broadcast_channel_viewers(state, HUB_ID, "general");
     send_mod_updates_for_user(state, &clean);
+    send_global_admin_action(state, &clean);
 }
 
 fn send_group_list(state: &AppState, conn_id: usize, username: &str) {
@@ -1220,6 +1847,9 @@ fn send_history(state: &AppState, conn_id: usize, username: &str, group_id: &str
 }
 
 fn send_chat(state: &AppState, name: &str, group_id: &str, channel_id: &str, text: String) {
+    if is_globally_muted(state, name) {
+        return;
+    }
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce_ref = Nonce::from_slice(&nonce);
@@ -1235,6 +1865,7 @@ fn send_chat(state: &AppState, name: &str, group_id: &str, channel_id: &str, tex
             timestamp: ts,
         };
         store_message(state, group_id, channel_id, stored);
+        *state.total_messages.lock().unwrap() += 1;
         broadcast(
             state,
             &ServerEvent::Message {
@@ -1286,6 +1917,18 @@ async fn switch_group(
         send_mod_update(state, group_id, &uname);
         return;
     }
+    if group_id != HUB_ID {
+        let device_id = state
+            .conn_states
+            .lock()
+            .unwrap()
+            .get(&conn_id)
+            .map(|c| c.device_id.clone())
+            .unwrap_or_default();
+        if is_room_banned(state, &uname, &device_id) {
+            return;
+        }
+    }
     {
         let mut cs = state.conn_states.lock().unwrap();
         let Some(c) = cs.get_mut(&conn_id) else {
@@ -1304,6 +1947,16 @@ async fn switch_group(
 fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
     let clean = name.trim();
     if clean.is_empty() || clean.len() > 48 {
+        return;
+    }
+    let device_id = state
+        .conn_states
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|c| c.device_id.clone())
+        .unwrap_or_default();
+    if is_room_banned(state, owner, &device_id) {
         return;
     }
     let id = rand_token("grp-", 8);
@@ -1360,6 +2013,17 @@ fn join_group(state: &AppState, conn_id: usize, username: &str, invite_code: &st
 
     if is_timed_out(state, &gid, username) {
         send_mod_update(state, &gid, username);
+        return;
+    }
+
+    let device_id = state
+        .conn_states
+        .lock()
+        .unwrap()
+        .get(&conn_id)
+        .map(|c| c.device_id.clone())
+        .unwrap_or_default();
+    if is_room_banned(state, username, &device_id) {
         return;
     }
 

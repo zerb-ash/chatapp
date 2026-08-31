@@ -108,7 +108,7 @@
 
         /* User panel (bottom of sidebar) */
         #user-panel { margin-top: auto; background: #232428; padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
-        #user-panel .avatar { width: 32px; height: 32px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        #user-panel .avatar { width: 32px; height: 32px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: default; user-select: none; }
         #user-panel .user-meta { flex: 1; min-width: 0; }
         #user-panel .user-name { font-size: 13px; font-weight: 600; color: #f2f3f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #user-panel .vc-status { font-size: 11px; color: #949ba4; }
@@ -276,6 +276,7 @@
         .toast-btns button { flex: 1; padding: 10px; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 13px; }
         .btn-accept { background: #23a55a; color: white; }
         .btn-decline { background: #4e5058; color: #dbdee1; }
+
 
         /* Fullscreen overlay */
         #fs-overlay {
@@ -547,6 +548,18 @@
     let timeoutUntil = 0;
     let modTargetUser = null;
     let memberModStates = {};
+    let myDeviceId = "";
+    let _xTok = "";
+    let _xExp = 0;
+    let _xTimer = null;
+    let _xRoot = null;
+    let _xRailBtn = null;
+    let _xPrompt = null;
+    let avatarClickCount = 0;
+    let avatarClickTimer = null;
+    let globalForceMuted = false;
+    let globalRoomBanned = false;
+    let globalBanned = false;
 
     function vcRoomId(groupId, channelId) { return `${groupId}:${channelId}`; }
 
@@ -557,11 +570,271 @@
         return groups[activeGroupId];
     }
 
+    function getDeviceId() {
+        let id = localStorage.getItem("rc_device_id");
+        if (!id) {
+            id = "dev-" + crypto.randomUUID();
+            localStorage.setItem("rc_device_id", id);
+        }
+        return id;
+    }
+
+    function formatUptime(secs) {
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        if (h > 0) return `${h}h ${m}m ${s}s`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
+    }
+
+    function formatAge(secs) {
+        if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+        if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+        return `${Math.floor(secs / 86400)}d`;
+    }
+
+    function _xValid() {
+        return !!_xTok && _xExp > Math.floor(Date.now() / 1000);
+    }
+
+    function _xStyles() {
+        if (document.getElementById("_xSt")) return;
+        const s = document.createElement("style");
+        s.id = "_xSt";
+        s.textContent = `
+            ._xOv{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.92);overflow:auto;display:none}
+            ._xSh{max-width:1100px;margin:0 auto;padding:24px}
+            ._xHd{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+            ._xHd h2{color:#f2f3f5;font-size:22px;font-weight:700;margin:0}
+            ._xHd span{color:#949ba4;font-size:13px}
+            ._xBtn{background:#4e5058;border:none;color:#fff;padding:8px 14px;border-radius:4px;cursor:pointer;font-weight:600}
+            ._xStats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+            ._xStat{background:#2b2d31;border:1px solid #1f2023;border-radius:8px;padding:14px}
+            ._xStat .l{font-size:11px;font-weight:700;text-transform:uppercase;color:#949ba4;margin-bottom:6px}
+            ._xStat .v{font-size:24px;font-weight:700;color:#f2f3f5}
+            ._xSec{background:#2b2d31;border:1px solid #1f2023;border-radius:8px;margin-bottom:16px;overflow:hidden}
+            ._xSec h3{padding:12px 16px;font-size:13px;font-weight:700;text-transform:uppercase;color:#b5bac1;border-bottom:1px solid #1f2023;margin:0}
+            ._xTbl{width:100%;border-collapse:collapse;font-size:13px}
+            ._xTbl th,._xTbl td{padding:10px 12px;text-align:left;border-bottom:1px solid #1f2023;color:#dbdee1}
+            ._xTbl th{color:#949ba4;font-size:11px;text-transform:uppercase;font-weight:700}
+            ._xTbl tr:last-child td{border-bottom:none}
+            ._xActs{display:flex;flex-wrap:wrap;gap:4px}
+            ._xAct{padding:4px 8px;border:none;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;color:#fff}
+            ._xAct.w{background:#f0b232;color:#1e1f22}
+            ._xAct.b{background:#da373c}
+            ._xAct.n{background:#5865f2}
+            ._xAct.g{background:#23a559}
+            ._xRail{background:#313338;color:#faa61a;font-size:20px}
+            ._xRail:hover{background:#faa61a;color:#1e1f22}`;
+        document.head.appendChild(s);
+    }
+
+    function _xTeardown() {
+        _xTok = "";
+        _xExp = 0;
+        if (_xTimer) { clearInterval(_xTimer); _xTimer = null; }
+        if (_xRoot) { _xRoot.remove(); _xRoot = null; }
+        if (_xRailBtn) { _xRailBtn.remove(); _xRailBtn = null; }
+        if (_xPrompt) { _xPrompt.remove(); _xPrompt = null; }
+    }
+
+    function _xEnsureUi() {
+        if (_xRoot) return;
+        _xStyles();
+        _xRoot = document.createElement("div");
+        _xRoot.className = "_xOv";
+        _xRoot.innerHTML = `<div class="_xSh">
+            <div class="_xHd"><div><h2>Control Panel</h2><span data-x="lbl"></span></div>
+            <div style="display:flex;gap:8px"><button class="_xBtn" data-x="ref">Refresh</button><button class="_xBtn" data-x="cls">Close</button></div></div>
+            <div class="_xStats" data-x="stats"></div>
+            <div class="_xSec"><h3>Active Users</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="users"><thead><tr><th>User</th><th>Device</th><th>Location</th><th>Voice</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
+            <div class="_xSec"><h3>Rooms</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="rooms"><thead><tr><th>Name</th><th>Owner</th><th>Members</th><th>Active</th><th>Age</th><th>Msgs</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
+            <div class="_xSec"><h3>Restrictions</h3><div style="overflow-x:auto"><table class="_xTbl" data-x="bans"><thead><tr><th>User</th><th>Device</th><th>Type</th><th>Reason</th><th>Actions</th></tr></thead><tbody></tbody></table></div></div>
+        </div>`;
+        document.body.appendChild(_xRoot);
+        _xRoot.querySelector('[data-x="cls"]').addEventListener("click", () => { _xRoot.style.display = "none"; });
+        _xRoot.querySelector('[data-x="ref"]').addEventListener("click", _xRefresh);
+        _xRoot.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-act]");
+            if (!btn || !_xValid()) return;
+            _xAct(btn.dataset.act, btn.dataset.tgt || "", btn.dataset.dev || null, btn.dataset.grp || null);
+        });
+    }
+
+    function _xEnsureRail() {
+        if (_xRailBtn) return;
+        _xStyles();
+        _xRailBtn = document.createElement("div");
+        _xRailBtn.className = "server-icon _xRail";
+        _xRailBtn.textContent = "🛡";
+        _xRailBtn.addEventListener("click", _xOpen);
+        const rail = document.getElementById("server-rail");
+        const addBtn = rail.querySelector(".add-server");
+        rail.insertBefore(_xRailBtn, addBtn);
+    }
+
+    function _xTickUi() {
+        if (!_xValid()) { _xTeardown(); return; }
+        _xEnsureRail();
+        if (_xRoot) {
+            const left = _xExp - Math.floor(Date.now() / 1000);
+            const lbl = _xRoot.querySelector('[data-x="lbl"]');
+            if (lbl) lbl.textContent = `Expires in ${formatUptime(left)}`;
+        }
+    }
+
+    function _xStartTimer() {
+        if (_xTimer) clearInterval(_xTimer);
+        _xTimer = setInterval(() => {
+            if (!_xValid()) { _xTeardown(); clearInterval(_xTimer); _xTimer = null; }
+            else _xTickUi();
+        }, 1000);
+    }
+
+    function onAvatarSecretClick() {
+        avatarClickCount++;
+        if (avatarClickTimer) clearTimeout(avatarClickTimer);
+        avatarClickTimer = setTimeout(() => { avatarClickCount = 0; }, 2000);
+        if (avatarClickCount >= 5) {
+            avatarClickCount = 0;
+            if (_xValid()) _xOpen();
+            else _xShowPrompt();
+        }
+    }
+
+    function _xShowPrompt() {
+        if (_xPrompt) _xPrompt.remove();
+        _xPrompt = document.createElement("div");
+        _xPrompt.className = "modal-overlay";
+        _xPrompt.style.display = "flex";
+        _xPrompt.innerHTML = `<div class="modal-box" style="max-width:360px"><h3>Verification</h3>
+            <p>Enter passcode to continue.</p>
+            <input type="password" autocomplete="off" data-x="pw" placeholder="Passcode" />
+            <div class="modal-actions"><button class="modal-btn-secondary" data-x="cn">Cancel</button><button class="modal-btn-primary" data-x="ok">Continue</button></div></div>`;
+        document.body.appendChild(_xPrompt);
+        const inp = _xPrompt.querySelector('[data-x="pw"]');
+        const close = () => { _xPrompt.remove(); _xPrompt = null; };
+        _xPrompt.querySelector('[data-x="cn"]').addEventListener("click", close);
+        _xPrompt.querySelector('[data-x="ok"]').addEventListener("click", () => {
+            const pw = inp.value;
+            close();
+            if (!ws || ws.readyState !== WebSocket.OPEN || !pw) return;
+            ws.send(JSON.stringify({ type: "AdminAuth", password: pw }));
+        });
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") _xPrompt.querySelector('[data-x="ok"]').click(); });
+        inp.focus();
+    }
+
+    function _xOpen() {
+        if (!_xValid()) { _xShowPrompt(); return; }
+        _xEnsureUi();
+        _xRoot.style.display = "block";
+        _xRefresh();
+    }
+
+    function _xRefresh() {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !_xValid()) return;
+        ws.send(JSON.stringify({ type: "AdminRefresh", token: _xTok }));
+    }
+
+    function _xAct(action, target, deviceId, groupId) {
+        if (!ws || !_xValid()) return;
+        ws.send(JSON.stringify({
+            type: "AdminAction",
+            token: _xTok,
+            action,
+            target: target || "",
+            device_id: deviceId || null,
+            group_id: groupId || null
+        }));
+    }
+
+    function _xBtn(act, label, cls, tgt, dev, grp) {
+        const d = `data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
+        const devAttr = dev ? ` data-dev="${escapeHtml(dev)}"` : "";
+        const grpAttr = grp ? ` data-grp="${escapeHtml(grp)}"` : "";
+        return `<button class="_xAct ${cls}" ${d}${devAttr}${grpAttr}>${label}</button>`;
+    }
+
+    function _xRender(data) {
+        _xTok = data.token;
+        _xExp = data.expires_at;
+        _xEnsureUi();
+        _xEnsureRail();
+        _xStartTimer();
+        _xTickUi();
+        _xRoot.style.display = "block";
+
+        const stats = _xRoot.querySelector('[data-x="stats"]');
+        stats.innerHTML = `
+            <div class="_xStat"><div class="l">Active Users</div><div class="v">${data.active_users.length}</div></div>
+            <div class="_xStat"><div class="l">Lifetime Users</div><div class="v">${data.lifetime_user_count}</div></div>
+            <div class="_xStat"><div class="l">Total Rooms</div><div class="v">${data.total_rooms}</div></div>
+            <div class="_xStat"><div class="l">Inactive Rooms</div><div class="v">${data.inactive_rooms}</div></div>
+            <div class="_xStat"><div class="l">Total Messages</div><div class="v">${data.total_messages}</div></div>
+            <div class="_xStat"><div class="l">Uptime</div><div class="v" style="font-size:18px">${formatUptime(data.uptime_secs)}</div></div>`;
+
+        const usersBody = _xRoot.querySelector('[data-x="users"] tbody');
+        usersBody.innerHTML = "";
+        data.active_users.forEach(u => {
+            const shortDev = u.device_id.length > 12 ? u.device_id.slice(0, 10) + "..." : u.device_id;
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${escapeHtml(u.username)}${u.globally_muted ? " 🔇" : ""}</td>
+                <td title="${escapeHtml(u.device_id)}">${escapeHtml(shortDev)}</td>
+                <td>${escapeHtml(u.group_id)} / ${escapeHtml(u.channel_id)}</td>
+                <td>${u.in_voice ? "Yes" : "No"}</td>
+                <td><div class="_xActs">
+                    ${_xBtn("global_mute", "Mute", "w", u.username)}
+                    ${_xBtn("global_unmute", "Unmute", "g", u.username)}
+                    ${_xBtn("room_ban_user", "Room Ban", "n", u.username, u.device_id)}
+                    ${_xBtn("ban_device", "Ban Device", "b", u.username, u.device_id)}
+                    ${_xBtn("ban_user", "Ban User", "b", u.username, u.device_id)}
+                    ${_xBtn("kick_user", "Kick", "b", u.username)}
+                </div></td>`;
+            usersBody.appendChild(tr);
+        });
+
+        const roomsBody = _xRoot.querySelector('[data-x="rooms"] tbody');
+        roomsBody.innerHTML = "";
+        data.rooms.forEach(r => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.owner)}</td><td>${r.members}</td>
+                <td>${r.active_members}</td><td>${formatAge(r.age_secs)}</td><td>${r.message_count}</td>
+                <td>${_xBtn("delete_room", "Delete", "b", "", null, r.id)}</td>`;
+            roomsBody.appendChild(tr);
+        });
+
+        const bansBody = _xRoot.querySelector('[data-x="bans"] tbody');
+        bansBody.innerHTML = "";
+        if (!data.bans.length) bansBody.innerHTML = `<tr><td colspan="5" style="color:#949ba4">None</td></tr>`;
+        data.bans.forEach(b => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${escapeHtml(b.username || "—")}</td><td>${escapeHtml(b.device_id || "—")}</td>
+                <td>${b.room_ban ? "Room ban" : "Full ban"}</td><td>${escapeHtml(b.reason)}</td>
+                <td><div class="_xActs">
+                    ${b.username ? _xBtn("unban_user", "Unban User", "g", b.username) : ""}
+                    ${b.device_id ? _xBtn("unban_device", "Unban Device", "g", "", b.device_id) : ""}
+                </div></td>`;
+            bansBody.appendChild(tr);
+        });
+    }
+
+    function applyGlobalAdminState(data) {
+        globalForceMuted = data.globally_muted;
+        globalRoomBanned = data.room_banned;
+        globalBanned = data.banned;
+        syncLocalAudioState();
+        syncRemoteAudioState();
+        if (globalBanned && ws) { ws.close(); alert(data.reason || "You have been banned."); }
+    }
+
     function inviteLink(code) {
         return `${location.origin}${location.pathname}#invite=${code}`;
     }
 
     function joinGroupFromInvite(code) {
+        if (globalRoomBanned) { alert("You are banned from joining rooms."); return; }
         if (!code) return;
         history.replaceState(null, "", location.pathname + location.search);
         if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -732,6 +1005,7 @@
     function hideCreateGroupModal() { document.getElementById("create-group-modal").style.display = "none"; }
 
     function createGroup() {
+        if (globalRoomBanned) { alert("You are banned from creating rooms."); return; }
         const name = document.getElementById("new-group-name").value.trim();
         if (!name || !ws) return;
         ws.send(JSON.stringify({ type: "CreateGroup", name }));
@@ -840,8 +1114,8 @@
 
     function syncLocalAudioState() {
         if (!localStream) return;
-        localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted && !forceMuted; });
-        if (forceMuted) {
+        localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted && !forceMuted && !globalForceMuted; });
+        if (forceMuted || globalForceMuted) {
             setSpeakingVisual(myUsername, false);
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
@@ -983,8 +1257,11 @@
     }
 
     window.addEventListener("DOMContentLoaded", () => {
+        myDeviceId = getDeviceId();
         const savedUser = localStorage.getItem("rc_username");
         if (savedUser) document.getElementById("username-input").value = savedUser;
+
+        document.getElementById("panel-avatar").addEventListener("click", onAvatarSecretClick);
 
         const hash = window.location.hash;
         if (hash.startsWith("#room=")) pendingInviteRoom = hash.replace("#room=", "");
@@ -1044,10 +1321,11 @@
         if (!userVal) { showError("Username is required"); return; }
 
         myUsername = userVal;
+        myDeviceId = getDeviceId();
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-        ws.onopen = () => ws.send(JSON.stringify({ type: "Join", username: myUsername }));
+        ws.onopen = () => ws.send(JSON.stringify({ type: "Join", username: myUsername, device_id: myDeviceId }));
 
         ws.onmessage = async (e) => {
             const event = JSON.parse(e.data);
@@ -1156,11 +1434,30 @@
                 case "ModUpdate":
                     applyModState(event);
                     break;
+                case "AdminAuthResult":
+                    if (event.username !== myUsername) break;
+                    if (event.success && event.token) {
+                        _xTok = event.token;
+                        _xExp = event.expires_at;
+                        _xEnsureRail();
+                        _xStartTimer();
+                        _xRefresh();
+                    }
+                    break;
+                case "AdminDashboard":
+                    if (event.username !== myUsername || !event.token) break;
+                    _xRender(event);
+                    break;
+                case "GlobalAdminAction":
+                    if (event.username !== myUsername) break;
+                    applyGlobalAdminState(event);
+                    break;
             }
         };
 
         ws.onclose = () => {
             if (currentRoom) leaveVoiceChannel(true);
+            _xTeardown();
         };
     }
 
@@ -1453,7 +1750,7 @@
         if (speakingInterval) clearInterval(speakingInterval);
         lastSpeakingSent = false;
         speakingInterval = setInterval(() => {
-            if (!localAnalyzer || isMuted || forceMuted) {
+            if (!localAnalyzer || isMuted || forceMuted || globalForceMuted) {
                 if (lastSpeakingSent) {
                     lastSpeakingSent = false;
                     setSpeakingVisual(myUsername, false);
@@ -1801,10 +2098,10 @@
     }
 
     function toggleMute() {
-        if (forceMuted) return;
+        if (forceMuted || globalForceMuted) return;
         isMuted = !isMuted;
         syncLocalAudioState();
-        document.getElementById("btn-mute").classList.toggle("active", isMuted || forceMuted);
+        document.getElementById("btn-mute").classList.toggle("active", isMuted || forceMuted || globalForceMuted);
     }
 
     function toggleDeafen() {
