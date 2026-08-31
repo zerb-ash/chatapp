@@ -501,7 +501,7 @@ fn kick_member_from_group(state: &AppState, actor: &str, group_id: &str, target:
     }
 
     let updated = {
-        let mut groups = state.groups.lock().unwrap();
+        let groups = state.groups.lock().unwrap();
         let Some(g) = groups.get(group_id) else {
             return;
         };
@@ -1212,17 +1212,19 @@ fn admin_rename_user(state: &AppState, old: &str, new: &str) {
     if new.is_empty() || new.len() > 32 {
         return;
     }
-    let Some((conn_id, old_exact)) = {
+    let (conn_id, old_exact) = {
         let users = state.users.lock().unwrap();
         if users.values().any(|u| u.eq_ignore_ascii_case(new)) {
             return;
         }
-        users
+        match users
             .iter()
             .find(|(_, u)| u.eq_ignore_ascii_case(old))
             .map(|(cid, u)| (*cid, u.clone()))
-    } else {
-        return;
+        {
+            Some(pair) => pair,
+            None => return,
+        }
     };
     if old_exact.eq_ignore_ascii_case(new) {
         return;
