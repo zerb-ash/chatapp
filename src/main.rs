@@ -77,19 +77,22 @@ async fn ws_handler(ws: WebSocketUpgrade, tx: broadcast::Sender<String>) -> impl
     ws.on_upgrade(|socket| handle_socket(socket, tx))
 }
 
-async fn handle_socket(mut socket: WebSocket, tx: broadcast::Sender<String>) {
+use futures_util::{SinkExt, StreamExt};
+
+async fn handle_socket(socket: WebSocket, tx: broadcast::Sender<String>) {
+    let (mut sender, mut receiver) = socket.split();
     let mut rx = tx.subscribe();
 
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
-            if socket.send(Message::Text(msg)).await.is_err() {
+            if sender.send(Message::Text(msg)).await.is_err() {
                 break;
             }
         }
     });
 
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(msg))) = socket.recv().await {
+        while let Some(Ok(Message::Text(msg))) = receiver.next().await {
             let _ = tx.send(msg);
         }
     });
