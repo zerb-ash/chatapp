@@ -397,7 +397,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     &target,
                                     &ServerEvent::VoiceSignal {
                                         from: name.clone(),
-                                        target,
+                                        target: target.clone(),
                                         signal,
                                     },
                                 );
@@ -410,7 +410,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     &target,
                                     &ServerEvent::VoiceInvite {
                                         from: name.clone(),
-                                        target,
+                                        target: target.clone(),
                                         room_id,
                                     },
                                 );
