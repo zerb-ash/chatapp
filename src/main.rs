@@ -80,6 +80,7 @@ struct AdminRoomRow {
     age_secs: u64,
     message_count: usize,
     invite_code: String,
+    persistent: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -100,6 +101,7 @@ struct GroupInfo {
     voice_channels: Vec<ChannelInfo>,
     members: Vec<String>,
     close_votes: Vec<String>,
+    persistent: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -303,6 +305,7 @@ struct ChatGroup {
     owner: String,
     invite_code: String,
     created_at: u64,
+    persistent: bool,
     text_channels: Vec<ChannelInfo>,
     voice_channels: Vec<ChannelInfo>,
     members: HashSet<String>,
@@ -956,6 +959,7 @@ fn build_admin_dashboard(state: &AppState, conn_id: usize, username: &str, token
             age_secs: now.saturating_sub(g.created_at),
             message_count: count_group_messages(g),
             invite_code: g.invite_code.clone(),
+            persistent: g.persistent,
         });
     }
     let total_rooms = rooms.len();
@@ -1208,6 +1212,27 @@ fn admin_transfer_owner(state: &AppState, group_id: &str, new_owner: &str) {
             group: updated,
         },
     );
+}
+
+fn admin_set_room_persistent(state: &AppState, group_id: &str, persistent: bool) {
+    if group_id == HUB_ID {
+        return;
+    }
+    let updated = {
+        let mut groups = state.groups.lock().unwrap();
+        let Some(g) = groups.get_mut(group_id) else {
+            return;
+        };
+        g.persistent = persistent;
+        group_info(group_id, g)
+    };
+    broadcast(
+        state,
+        &ServerEvent::GroupUpdated {
+            group: updated,
+        },
+    );
+    notify_admin_dashboards(state);
 }
 
 fn admin_rename_room(state: &AppState, group_id: &str, new_name: &str) {
@@ -1628,6 +1653,17 @@ fn handle_admin_action(
                 admin_rename_room(state, gid, name);
             }
         }
+        "set_room_24_7" => {
+            if let Some(ref gid) = group_id {
+                if gid != HUB_ID {
+                    let on = value
+                        .as_deref()
+                        .map(|v| v == "true" || v == "1")
+                        .unwrap_or(true);
+                    admin_set_room_persistent(state, gid, on);
+                }
+            }
+        }
         "transfer_owner" => {
             if let Some(ref gid) = group_id {
                 if !target.is_empty() {
@@ -1727,7 +1763,7 @@ fn purge_expired_rooms(state: &AppState) {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, g)| now.saturating_sub(g.created_at) >= ROOM_TTL_SECS)
+        .filter(|(_, g)| !g.persistent && now.saturating_sub(g.created_at) >= ROOM_TTL_SECS)
         .map(|(id, _)| id.clone())
         .collect();
     for id in expired {
@@ -1745,6 +1781,7 @@ fn group_info(id: &str, g: &ChatGroup) -> GroupInfo {
         voice_channels: g.voice_channels.clone(),
         members: g.members.iter().cloned().collect(),
         close_votes: g.close_votes.iter().cloned().collect(),
+        persistent: g.persistent,
     }
 }
 
@@ -1780,6 +1817,7 @@ fn hub_group_info(state: &AppState) -> GroupInfo {
         }],
         members: state.users.lock().unwrap().values().cloned().collect(),
         close_votes: vec![],
+        persistent: false,
     }
 }
 
@@ -2696,6 +2734,7 @@ fn create_group(state: &AppState, conn_id: usize, owner: &str, name: String) {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
+        persistent: false,
         text_channels: vec![ChannelInfo {
             id: "general".into(),
             name: "general".into(),

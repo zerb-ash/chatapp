@@ -123,13 +123,26 @@
         .chat-header { height: 48px; padding: 0 16px; border-bottom: 1px solid #1f2023; font-weight: 600; color: #f2f3f5; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 0 rgba(0,0,0,0.1); flex-shrink: 0; }
         .chat-header .hash { color: #949ba4; font-size: 22px; font-weight: 400; line-height: 1; }
 
-        /* Video / screen share stage */
-        #video-stage { display: none; flex-direction: column; background: #1e1f22; border-bottom: 1px solid #1f2023; flex-shrink: 0; }
-        #video-stage.visible { display: flex; }
-        #video-stage-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #2b2d31; font-size: 13px; font-weight: 600; color: #f2f3f5; }
-        #video-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; max-height: 420px; overflow: auto; }
-        .video-tile { position: relative; flex: 1 1 320px; min-width: 280px; max-width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; }
-        .video-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; image-rendering: auto; }
+        /* Voice call stage (Discord-style) */
+        #vc-stage { display: none; flex-direction: column; background: #1e1f22; border-bottom: 1px solid #1f2023; flex-shrink: 0; }
+        #vc-stage.visible { display: flex; }
+        .vc-stage-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #2b2d31; min-height: 72px; }
+        .vc-stage-info { display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: #f2f3f5; }
+        .vc-stage-icon { font-size: 16px; }
+        #vc-participant-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
+        .vc-bubble { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; flex-shrink: 0; }
+        .vc-bubble-avatar { width: 52px; height: 52px; border-radius: 50%; background: #5865f2; color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 3px solid #1e1f22; transition: border-color 0.1s, box-shadow 0.1s; position: relative; }
+        .vc-bubble-avatar.speaking { border-color: #23a55a; box-shadow: 0 0 0 2px rgba(35,165,90,0.35); }
+        .vc-bubble-avatar.sharing::after { content: ""; position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; background: #5865f2; border: 2px solid #2b2d31; border-radius: 4px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z'/%3E%3C/svg%3E"); background-size: 10px; background-repeat: no-repeat; background-position: center; }
+        .vc-bubble-name { font-size: 11px; color: #b5bac1; max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+        .vc-stage-leave { flex-shrink: 0; padding: 6px 12px; background: #4e5058; border: none; border-radius: 4px; color: #dbdee1; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .vc-stage-leave:hover { background: #da373c; color: #fff; }
+        #screen-share-wrap { display: none; flex-direction: column; border-top: 1px solid #1f2023; }
+        #screen-share-wrap.visible { display: flex; }
+        #screen-share-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; background: #232428; font-size: 12px; font-weight: 600; color: #949ba4; }
+        #video-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; max-height: 260px; overflow: auto; }
+        .video-tile { position: relative; flex: 0 1 320px; min-width: 200px; max-width: 100%; height: 180px; background: #111214; border-radius: 8px; overflow: hidden; }
+        .video-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #111214; }
         .video-tile .tile-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.75); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; pointer-events: none; }
         .video-tile .tile-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
         .video-tile:hover .tile-controls { opacity: 1; }
@@ -466,12 +479,22 @@
         <span class="viewer-count" id="header-viewer-count">👁 0</span>
     </div>
 
-    <div id="video-stage">
-        <div id="video-stage-header">
-            <span>Screen Share</span>
-            <span id="video-count" style="color:#949ba4;font-weight:400;font-size:12px;"></span>
+    <div id="vc-stage">
+        <div class="vc-stage-bar">
+            <div class="vc-stage-info">
+                <span class="vc-stage-icon">🔊</span>
+                <span id="vc-stage-label">Voice Connected</span>
+            </div>
+            <div id="vc-participant-row"></div>
+            <button type="button" class="vc-stage-leave" onclick="leaveVoiceChannel()">Disconnect</button>
         </div>
-        <div id="video-grid"></div>
+        <div id="screen-share-wrap">
+            <div id="screen-share-header">
+                <span>Screen Share</span>
+                <span id="video-count"></span>
+            </div>
+            <div id="video-grid"></div>
+        </div>
     </div>
 
     <div id="messages"></div>
@@ -565,7 +588,7 @@
 
     function getActiveGroup() {
         if (activeGroupId === "hub") {
-            return { id: "hub", name: "Nimbus", owner: "system", invite_code: "", text_channels: [{ id: "general", name: "general", kind: "text" }], voice_channels: [{ id: "general", name: "General VC", kind: "voice" }], members: [], close_votes: [] };
+            return { id: "hub", name: "Nimbus", owner: "system", invite_code: "", persistent: false, text_channels: [{ id: "general", name: "general", kind: "text" }], voice_channels: [{ id: "general", name: "General VC", kind: "voice" }], members: [], close_votes: [] };
         }
         return groups[activeGroupId];
     }
@@ -757,6 +780,7 @@
         let attrs = `class="${cls.trim()}" data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
         if (opts.dev) attrs += ` data-dev="${escapeHtml(opts.dev)}"`;
         if (opts.grp) attrs += ` data-grp="${escapeHtml(opts.grp)}"`;
+        if (opts.val) attrs += ` data-val="${escapeHtml(opts.val)}"`;
         if (opts.prompt) attrs += ` data-prompt="${escapeHtml(opts.prompt)}"`;
         if (opts.xPick) attrs += ` data-x-pick="${opts.xPick}" data-pick-label="${escapeHtml(opts.pickLabel || "")}"`;
         return `<button type="button" ${attrs}>${label}</button>`;
@@ -767,6 +791,7 @@
         let attrs = `class="${cls.trim()}" data-act="${act}" data-tgt="${escapeHtml(tgt || "")}"`;
         if (opts.dev) attrs += ` data-dev="${escapeHtml(opts.dev)}"`;
         if (opts.grp) attrs += ` data-grp="${escapeHtml(opts.grp)}"`;
+        if (opts.val) attrs += ` data-val="${escapeHtml(opts.val)}"`;
         if (opts.prompt) attrs += ` data-prompt="${escapeHtml(opts.prompt)}"`;
         if (opts.xPick) attrs += ` data-x-pick="${opts.xPick}" data-pick-label="${escapeHtml(opts.pickLabel || "")}"`;
         return `<button type="button" ${attrs}>${label}</button>`;
@@ -875,6 +900,7 @@
                     _xShowPop(popBtn,
                         _xPopItem("rename_room", "Rename", "", { prompt: "New room name:", grp: r.id })
                         + _xPopItem("reset_invite", "New invite", "", { grp: r.id })
+                        + _xPopItem("set_room_24_7", r.persistent ? "Disable 24/7" : "Enable 24/7", "", { grp: r.id, val: r.persistent ? "false" : "true" })
                         + _xPopItem("clear_messages", "Clear msgs", "", { cls: "warn", grp: r.id })
                         + _xPopItem("delete_room", "Delete", "", { cls: "bad", grp: r.id }));
                 } else if (kind === "ban") {
@@ -1050,7 +1076,7 @@
                 <td><div class="_xUser">${escapeHtml(r.name)}</div><div class="_xMuted">${escapeHtml(r.id)}</div></td>
                 <td>${escapeHtml(r.owner)}</td>
                 <td><div class="_xMembers">${memberList}</div></td>
-                <td><div class="_xMeta">${r.active_members} online · ${r.member_count} members<br>${formatAge(r.age_secs)} old · ${r.message_count} msgs<br><span title="${escapeHtml(r.invite_code || "")}">${escapeHtml(shortInv.length > 14 ? shortInv.slice(0, 12) + "…" : shortInv)}</span></div></td>
+                <td><div class="_xMeta">${r.active_members} online · ${r.member_count} members<br>${formatAge(r.age_secs)} old · ${r.message_count} msgs${r.persistent ? " · <span style='color:#23a559'>24/7</span>" : ""}<br><span title="${escapeHtml(r.invite_code || "")}">${escapeHtml(shortInv.length > 14 ? shortInv.slice(0, 12) + "…" : shortInv)}</span></div></td>
                 <td><button type="button" class="_xPopBtn" data-x-pop="room" data-x-idx="${ri}" title="Room actions">⋯</button></td>`;
             roomsBody.appendChild(tr);
         });
@@ -1246,9 +1272,6 @@
         if (groupId !== "hub" && isTimedOut(groupId)) {
             alert("You are timed out from this room.");
             return;
-        }
-        if (currentRoom && !currentRoom.startsWith(groupId + ":") && !currentRoom.startsWith("priv-")) {
-            leaveVoiceChannel(true);
         }
         activeGroupId = groupId;
         activeChannelId = "general";
@@ -1953,6 +1976,7 @@
             statusEl.classList.remove("connected");
         }
         document.getElementById("btn-screen").disabled = !inVc;
+        updateVcStage();
     }
 
     async function joinVoiceRoom(roomName) {
@@ -2023,7 +2047,8 @@
 
         document.getElementById("remote-audio-container").innerHTML = "";
         document.getElementById("video-grid").innerHTML = "";
-        document.getElementById("video-stage").classList.remove("visible");
+        document.getElementById("vc-stage").classList.remove("visible");
+        document.getElementById("screen-share-wrap").classList.remove("visible");
         stopSpeakingMonitor();
         renderVCRosters();
     }
@@ -2053,7 +2078,73 @@
         }
 
         renderVCRosters();
-        updateVideoStage();
+        updateVcStage();
+    }
+
+    function renderVcParticipants() {
+        const row = document.getElementById("vc-participant-row");
+        if (!row || !currentRoom) return;
+        row.innerHTML = "";
+        const users = Object.keys(roomMembers).filter(u => roomMembers[u] === currentRoom);
+        if (myUsername && !users.includes(myUsername)) users.unshift(myUsername);
+        users.forEach(user => {
+            const initial = user.charAt(0).toUpperCase();
+            const sharing = user === myUsername ? isScreenSharing : !!document.getElementById(`tile-${user}`);
+            const bubble = document.createElement("div");
+            bubble.className = "vc-bubble";
+            bubble.id = `vc-bubble-${user}`;
+            bubble.innerHTML = `<div class="vc-bubble-avatar${sharing ? " sharing" : ""}" id="vc-avatar-${user}">${initial}</div><span class="vc-bubble-name">${escapeHtml(user === myUsername ? "You" : user)}</span>`;
+            row.appendChild(bubble);
+        });
+    }
+
+    function pruneDeadVideoTiles() {
+        document.querySelectorAll("#video-grid .video-tile").forEach(tile => {
+            const userId = tile.id.replace("tile-", "");
+            const vid = tile.querySelector("video");
+            if (!vid || !vid.srcObject) {
+                tile.remove();
+                delete remoteVideoTracks[userId];
+                return;
+            }
+            const tracks = vid.srcObject.getVideoTracks ? vid.srcObject.getVideoTracks() : [];
+            if (!tracks.length || tracks.every(t => t.readyState === "ended")) {
+                tile.remove();
+                delete remoteVideoTracks[userId];
+            }
+        });
+    }
+
+    function updateVcStage() {
+        const stage = document.getElementById("vc-stage");
+        const shareWrap = document.getElementById("screen-share-wrap");
+        if (!stage || !shareWrap) return;
+
+        if (!currentRoom) {
+            stage.classList.remove("visible");
+            shareWrap.classList.remove("visible");
+            return;
+        }
+
+        stage.classList.add("visible");
+        let label = currentRoom;
+        if (currentRoom.includes(":")) {
+            const parts = currentRoom.split(":");
+            label = parts[parts.length - 1];
+        }
+        document.getElementById("vc-stage-label").textContent = "Voice — " + label;
+
+        pruneDeadVideoTiles();
+        renderVcParticipants();
+
+        const count = document.querySelectorAll("#video-grid .video-tile").length;
+        if (count > 0) {
+            shareWrap.classList.add("visible");
+            document.getElementById("video-count").textContent = count + " stream" + (count !== 1 ? "s" : "");
+        } else {
+            shareWrap.classList.remove("visible");
+            document.getElementById("video-count").textContent = "";
+        }
     }
 
     function renderVCRosters() {
@@ -2074,6 +2165,8 @@
     function setSpeakingVisual(username, speaking) {
         const avatar = document.getElementById(`avatar-${username}`);
         if (avatar) avatar.classList.toggle("speaking", speaking);
+        const vcAvatar = document.getElementById(`vc-avatar-${username}`);
+        if (vcAvatar) vcAvatar.classList.toggle("speaking", speaking);
     }
 
     function setupLocalAnalyzer(stream) {
@@ -2188,7 +2281,7 @@
         };
 
         if (!isLocal) remoteVideoTracks[userId] = track.id;
-        updateVideoStage();
+        updateVcStage();
     }
 
     function syncPeerMedia(userId, pc) {
@@ -2209,7 +2302,10 @@
     }
 
     function handleScreenShareState(username, sharing) {
-        if (sharing) return;
+        if (sharing) {
+            updateVcStage();
+            return;
+        }
         removeVideoTile(username);
         if (fsUserId === username) closeFullscreen();
     }
@@ -2459,18 +2555,11 @@
         delete remoteVideoTracks[userId];
         const tile = document.getElementById(`tile-${userId}`);
         if (tile) tile.remove();
-        updateVideoStage();
+        updateVcStage();
     }
 
     function updateVideoStage() {
-        const count = document.querySelectorAll("#video-grid .video-tile").length;
-        const stage = document.getElementById("video-stage");
-        if (count > 0) {
-            stage.classList.add("visible");
-            document.getElementById("video-count").textContent = count + " stream" + (count !== 1 ? "s" : "");
-        } else {
-            stage.classList.remove("visible");
-        }
+        updateVcStage();
     }
 
     async function toggleScreenShare() {
