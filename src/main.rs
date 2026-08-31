@@ -71,6 +71,10 @@ enum ServerEvent {
         username: String,
         is_speaking: bool,
     },
+    ScreenShareState {
+        username: String,
+        sharing: bool,
+    },
     DeleteVoiceRoom { room_id: String },
 }
 
@@ -84,6 +88,7 @@ enum ClientEvent {
     VoiceInvite { target: String, room_id: String },
     VoiceStateUpdate { room_id: Option<String> },
     Speaking { is_speaking: bool },
+    ScreenShareState { sharing: bool },
     DeleteVoiceRoom { room_id: String },
 }
 
@@ -242,19 +247,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                         let my_name = state_tx_task.users.lock().unwrap().get(&conn_id).cloned();
                                         my_name.map(|n| n == target).unwrap_or(false)
                                     }
-                                    "SpeakingUpdate" => {
+                                    "SpeakingUpdate" | "ScreenShareState" => {
                                         let speaker = val.get("username").and_then(|t| t.as_str()).unwrap_or("");
-                                        let is_speaking = val.get("is_speaking").and_then(|t| t.as_bool()).unwrap_or(false);
                                         let my_name = state_tx_task.users.lock().unwrap().get(&conn_id).cloned();
                                         let Some(my_name) = my_name else { continue; };
-                                        if speaker == my_name { continue; }
-                                        if !is_speaking {
-                                            true
+                                        if event_type == "SpeakingUpdate" {
+                                            let is_speaking = val.get("is_speaking").and_then(|t| t.as_bool()).unwrap_or(false);
+                                            if speaker == my_name { continue; }
+                                            if !is_speaking {
+                                                true
+                                            } else {
+                                                let voice = state_tx_task.voice_states.lock().unwrap();
+                                                let my_room = voice.get(&my_name).cloned();
+                                                let speaker_room = voice.get(speaker).cloned();
+                                                my_room.is_some() && my_room == speaker_room
+                                            }
                                         } else {
                                             let voice = state_tx_task.voice_states.lock().unwrap();
                                             let my_room = voice.get(&my_name).cloned();
-                                            let speaker_room = voice.get(speaker).cloned();
-                                            my_room.is_some() && my_room == speaker_room
+                                            let sharer_room = voice.get(speaker).cloned();
+                                            my_room.is_some() && my_room == sharer_room
                                         }
                                     }
                                     _ => true,
@@ -468,6 +480,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     &ServerEvent::SpeakingUpdate {
                                         username: name.clone(),
                                         is_speaking,
+                                    },
+                                );
+                            }
+                        }
+                        ClientEvent::ScreenShareState { sharing } => {
+                            if let Some(ref name) = current_username {
+                                broadcast(
+                                    &state_recv_task,
+                                    &ServerEvent::ScreenShareState {
+                                        username: name.clone(),
+                                        sharing,
                                     },
                                 );
                             }

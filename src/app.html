@@ -126,11 +126,60 @@
         .btn-decline { background: #4e5058; color: #dbdee1; }
 
         /* Fullscreen overlay */
-        #fs-overlay { display: none; position: fixed; inset: 0; background: #000; z-index: 500; flex-direction: column; }
+        #fs-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            background: #000;
+            z-index: 500;
+            flex-direction: column;
+            overflow: hidden;
+        }
         #fs-overlay.active { display: flex; }
-        #fs-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(0,0,0,0.8); color: #fff; font-weight: 600; flex-shrink: 0; }
-        #fs-video { flex: 1; width: 100%; object-fit: contain; }
-        #fs-close { background: #da373c; border: none; color: #fff; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+        #fs-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: rgba(0,0,0,0.85);
+            color: #fff;
+            font-weight: 600;
+            flex-shrink: 0;
+            min-height: 48px;
+            z-index: 2;
+        }
+        #fs-video-wrap {
+            flex: 1;
+            min-height: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            position: relative;
+        }
+        #fs-video {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            background: #000;
+        }
+        #fs-close {
+            background: #da373c;
+            border: none;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        #fs-close:hover { background: #a1282b; }
 
         #remote-audio-container { display: none; }
 
@@ -149,7 +198,9 @@
         <span id="fs-label">Screen Share</span>
         <button id="fs-close" onclick="closeFullscreen()">Exit Fullscreen</button>
     </div>
-    <video id="fs-video" autoplay playsinline></video>
+    <div id="fs-video-wrap">
+        <video id="fs-video" autoplay playsinline></video>
+    </div>
 </div>
 
 <div id="modal">
@@ -271,6 +322,7 @@
     let isMuted = false;
     let isDeafened = false;
     let isScreenSharing = false;
+    let fsUserId = null;
 
     const rtcConfig = {
         iceServers: [
@@ -280,15 +332,15 @@
     };
 
     const screenShareCapture = {
-        width: { ideal: 1920, max: 3840 },
-        height: { ideal: 1080, max: 2160 },
-        frameRate: { ideal: 30, max: 60 },
+        width: { ideal: 1920, max: 1920 },
+        height: { ideal: 1080, max: 1080 },
+        frameRate: { ideal: 60, max: 60 },
         cursor: "always"
     };
 
     const screenShareEncoding = {
-        maxBitrate: 10_000_000,
-        maxFramerate: 30,
+        maxBitrate: 20_000_000,
+        maxFramerate: 60,
         scaleResolutionDownBy: 1
     };
 
@@ -449,6 +501,9 @@
                     break;
                 case "SpeakingUpdate":
                     setSpeakingVisual(event.username, event.is_speaking);
+                    break;
+                case "ScreenShareState":
+                    handleScreenShareState(event.username, event.sharing);
                     break;
                 case "DeleteVoiceRoom":
                     handleDeleteVoiceRoom(event.room_id);
@@ -803,13 +858,30 @@
     }
 
     function syncPeerMedia(userId, pc) {
+        let hasLiveVideo = false;
         pc.getReceivers().forEach(receiver => {
             if (!receiver.track) return;
             if (receiver.track.kind === "audio") attachAudioTrack(userId, receiver.track);
-            else if (receiver.track.kind === "video" && remoteVideoTracks[userId] !== receiver.track.id) {
-                attachVideoTrack(userId, receiver.track, false);
+            else if (receiver.track.kind === "video" && receiver.track.readyState === "live") {
+                hasLiveVideo = true;
+                if (remoteVideoTracks[userId] !== receiver.track.id) {
+                    attachVideoTrack(userId, receiver.track, false);
+                }
             }
         });
+        if (!hasLiveVideo && remoteVideoTracks[userId]) removeVideoTile(userId);
+    }
+
+    function notifyScreenShareState(sharing) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ScreenShareState", sharing }));
+        }
+    }
+
+    function handleScreenShareState(username, sharing) {
+        if (sharing) return;
+        removeVideoTile(username);
+        if (fsUserId === username) closeFullscreen();
     }
 
     function addScreenShareToPeer(targetUser, pc) {
@@ -1027,6 +1099,8 @@
             }
             setTimeout(refreshAllScreenEncodings, 500);
             setTimeout(refreshAllScreenEncodings, 2000);
+
+            notifyScreenShareState(true);
         } catch (err) {
             console.error("Screen share cancelled or failed:", err);
             isScreenSharing = false;
@@ -1036,6 +1110,9 @@
 
     function stopScreenShare(manual) {
         if (!isScreenSharing && !localScreenStream) return;
+
+        notifyScreenShareState(false);
+
         isScreenSharing = false;
         document.getElementById("btn-screen").classList.remove("active");
 
@@ -1043,32 +1120,59 @@
             removeScreenShareFromPeer(target, pc);
         }
         screenShareSenders = {};
-        remoteVideoTracks = {};
 
         if (localScreenStream) {
             localScreenStream.getTracks().forEach(t => t.stop());
             localScreenStream = null;
         }
         removeVideoTile("local");
+        if (fsUserId === "local") closeFullscreen();
     }
 
-    function openFullscreen(userId) {
-        const srcVideo = document.getElementById(`video-${userId}`);
-        if (!srcVideo || !srcVideo.srcObject) return;
+    function syncFullscreenVideo() {
+        if (!fsUserId) return;
+        const srcVideo = document.getElementById(`video-${fsUserId}`);
         const fsVideo = document.getElementById("fs-video");
-        fsVideo.srcObject = srcVideo.srcObject;
-        document.getElementById("fs-label").textContent = userId === "local" ? "Your screen" : userId + "'s screen";
-        document.getElementById("fs-overlay").classList.add("active");
+        if (!srcVideo || !srcVideo.srcObject) return;
+        if (fsVideo.srcObject !== srcVideo.srcObject) fsVideo.srcObject = srcVideo.srcObject;
         fsVideo.play().catch(() => {});
     }
 
-    function closeFullscreen() {
-        document.getElementById("fs-overlay").classList.remove("active");
-        document.getElementById("fs-video").srcObject = null;
+    async function openFullscreen(userId) {
+        const srcVideo = document.getElementById(`video-${userId}`);
+        if (!srcVideo || !srcVideo.srcObject) return;
+
+        fsUserId = userId;
+        document.getElementById("fs-label").textContent = userId === "local" ? "Your screen" : userId + "'s screen";
+
+        const overlay = document.getElementById("fs-overlay");
+        overlay.classList.add("active");
+        syncFullscreenVideo();
+
+        try {
+            if (!document.fullscreenElement) await overlay.requestFullscreen({ navigationUI: "hide" });
+        } catch (e) {
+            try { await document.documentElement.requestFullscreen({ navigationUI: "hide" }); } catch (_) {}
+        }
     }
 
+    function closeFullscreen() {
+        fsUserId = null;
+        document.getElementById("fs-overlay").classList.remove("active");
+        document.getElementById("fs-video").srcObject = null;
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    }
+
+    document.addEventListener("fullscreenchange", () => {
+        if (!document.fullscreenElement && fsUserId) closeFullscreen();
+    });
+
+    window.addEventListener("resize", () => {
+        if (fsUserId) syncFullscreenVideo();
+    });
+
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeFullscreen();
+        if (e.key === "Escape" && document.getElementById("fs-overlay").classList.contains("active")) closeFullscreen();
     });
 
     function inviteUser(targetUser) {
