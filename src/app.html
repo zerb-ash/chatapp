@@ -61,7 +61,7 @@
         #video-stage-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #2b2d31; font-size: 13px; font-weight: 600; color: #f2f3f5; }
         #video-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; max-height: 420px; overflow: auto; }
         .video-tile { position: relative; flex: 1 1 320px; min-width: 280px; max-width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; }
-        .video-tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .video-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; image-rendering: auto; }
         .video-tile .tile-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.75); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; pointer-events: none; }
         .video-tile .tile-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
         .video-tile:hover .tile-controls { opacity: 1; }
@@ -277,6 +277,19 @@
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" }
         ]
+    };
+
+    const screenShareCapture = {
+        width: { ideal: 1920, max: 3840 },
+        height: { ideal: 1080, max: 2160 },
+        frameRate: { ideal: 30, max: 60 },
+        cursor: "always"
+    };
+
+    const screenShareEncoding = {
+        maxBitrate: 10_000_000,
+        maxFramerate: 30,
+        scaleResolutionDownBy: 1
     };
 
     DOMPurify.setConfig({
@@ -803,7 +816,46 @@
         if (!localScreenStream || screenShareSenders[targetUser]) return;
         const videoTrack = localScreenStream.getVideoTracks()[0];
         if (!videoTrack) return;
-        screenShareSenders[targetUser] = pc.addTrack(videoTrack, localScreenStream);
+        const sender = pc.addTrack(videoTrack, localScreenStream);
+        screenShareSenders[targetUser] = sender;
+        applyScreenShareEncoding(sender);
+    }
+
+    async function applyScreenCaptureQuality(track) {
+        track.contentHint = "detail";
+        try {
+            await track.applyConstraints({
+                width: screenShareCapture.width,
+                height: screenShareCapture.height,
+                frameRate: screenShareCapture.frameRate
+            });
+        } catch (e) {
+            console.warn("Could not apply capture constraints:", e);
+        }
+    }
+
+    async function applyScreenShareEncoding(sender) {
+        if (!sender) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+
+            params.encodings[0].maxBitrate = screenShareEncoding.maxBitrate;
+            params.encodings[0].maxFramerate = screenShareEncoding.maxFramerate;
+            params.encodings[0].scaleResolutionDownBy = screenShareEncoding.scaleResolutionDownBy;
+            params.encodings[0].priority = "high";
+            params.degradationPreference = "maintain-resolution";
+
+            await sender.setParameters(params);
+        } catch (e) {
+            console.warn("Could not set screen encoding:", e);
+        }
+    }
+
+    async function refreshAllScreenEncodings() {
+        for (const sender of Object.values(screenShareSenders)) {
+            await applyScreenShareEncoding(sender);
+        }
     }
 
     function removeScreenShareFromPeer(targetUser, pc) {
@@ -844,6 +896,7 @@
                 pc.makingOffer = true;
                 await pc.setLocalDescription();
                 sendVoiceSignal(targetUser, { sdp: pc.localDescription });
+                if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
             } catch (err) {
                 console.error("Negotiation error:", err);
             } finally {
@@ -957,13 +1010,13 @@
 
         try {
             localScreenStream = await navigator.mediaDevices.getDisplayMedia({
-                video: { cursor: "always" },
+                video: screenShareCapture,
                 audio: false
             });
 
             const videoTrack = localScreenStream.getVideoTracks()[0];
             if (!videoTrack) throw new Error("No video track from screen capture");
-            videoTrack.contentHint = "detail";
+            await applyScreenCaptureQuality(videoTrack);
 
             isScreenSharing = true;
             document.getElementById("btn-screen").classList.add("active");
@@ -972,6 +1025,8 @@
             for (const [target, pc] of Object.entries(peerConnections)) {
                 addScreenShareToPeer(target, pc);
             }
+            setTimeout(refreshAllScreenEncodings, 500);
+            setTimeout(refreshAllScreenEncodings, 2000);
         } catch (err) {
             console.error("Screen share cancelled or failed:", err);
             isScreenSharing = false;
