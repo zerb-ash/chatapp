@@ -4,10 +4,12 @@ use axum::{
     routing::get,
     Router,
 };
+
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
+
 use aes_gcm::aead::rand_core::RngCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -163,6 +165,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/health", get(health))
+        .route("/favicon.ico", get(favicon))
         .route("/ws", get({
             let state = state.clone();
             move |ws| ws_handler(ws, state.clone())
@@ -171,9 +175,30 @@ async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
-    println!("RustCord listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    eprintln!("RustCord starting on {addr}");
+
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind to {addr}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("RustCord listening on http://{addr}");
+
+    if let Err(e) = axum::serve(listener, app).await {
+        eprintln!("Server error: {e}");
+        std::process::exit(1);
+    }
+}
+
+async fn health() -> impl IntoResponse {
+    "ok"
+}
+
+async fn favicon() -> impl IntoResponse {
+    ([("cache-control", "no-store")], axum::http::StatusCode::NO_CONTENT)
 }
 
 async fn index() -> Html<&'static str> {
