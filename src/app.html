@@ -558,6 +558,7 @@
     let isMuted = false;
     let isDeafened = false;
     let isScreenSharing = false;
+    let screenSharers = new Set();
     let fsUserId = null;
     let activeGroupId = "hub";
     let activeChannelId = "general";
@@ -2082,6 +2083,7 @@
         document.getElementById("video-grid").innerHTML = "";
         document.getElementById("vc-connected").classList.remove("visible");
         document.getElementById("screen-share-wrap").classList.remove("visible");
+        screenSharers.clear();
         stopSpeakingMonitor();
         renderVCRosters();
     }
@@ -2122,7 +2124,7 @@
         if (myUsername && !users.includes(myUsername)) users.unshift(myUsername);
         users.forEach(user => {
             const initial = user.charAt(0).toUpperCase();
-            const sharing = user === myUsername ? isScreenSharing : !!document.getElementById(`tile-${user}`);
+            const sharing = user === myUsername ? isScreenSharing : screenSharers.has(user);
             const label = user === myUsername ? "You" : user;
             const bubble = document.createElement("div");
             bubble.className = "vc-bubble";
@@ -2133,31 +2135,54 @@
         });
     }
 
+    function isLiveVideoTile(tile) {
+        const vid = tile?.querySelector("video");
+        if (!vid?.srcObject) return false;
+        const tracks = vid.srcObject.getVideoTracks ? vid.srcObject.getVideoTracks() : [];
+        return tracks.length > 0 && tracks.some(t => t.readyState === "live");
+    }
+
     function pruneDeadVideoTiles() {
         document.querySelectorAll("#video-grid .video-tile").forEach(tile => {
             const userId = tile.id.replace("tile-", "");
-            const vid = tile.querySelector("video");
-            if (!vid || !vid.srcObject) {
+            const isLocal = userId === "local";
+            if (!isLiveVideoTile(tile)) {
                 tile.remove();
-                delete remoteVideoTracks[userId];
+                if (!isLocal) delete remoteVideoTracks[userId];
                 return;
             }
-            const tracks = vid.srcObject.getVideoTracks ? vid.srcObject.getVideoTracks() : [];
-            if (!tracks.length || tracks.every(t => t.readyState === "ended")) {
+            if (isLocal && !isScreenSharing) {
+                tile.remove();
+                return;
+            }
+            if (!isLocal && !screenSharers.has(userId)) {
                 tile.remove();
                 delete remoteVideoTracks[userId];
             }
         });
     }
 
+    function liveVideoTileCount() {
+        pruneDeadVideoTiles();
+        return document.querySelectorAll("#video-grid .video-tile").length;
+    }
+
+    function updateScreenShareStrip() {
+        const shareWrap = document.getElementById("screen-share-wrap");
+        if (!shareWrap) return;
+        const count = liveVideoTileCount();
+        shareWrap.classList.toggle("visible", count > 0);
+        const countEl = document.getElementById("video-count");
+        if (countEl) countEl.textContent = count > 0 ? count + " stream" + (count !== 1 ? "s" : "") : "";
+    }
+
     function updateVcStage() {
         const connected = document.getElementById("vc-connected");
-        const shareWrap = document.getElementById("screen-share-wrap");
-        if (!connected || !shareWrap) return;
+        if (!connected) return;
 
         if (!currentRoom) {
             connected.classList.remove("visible");
-            shareWrap.classList.remove("visible");
+            document.getElementById("screen-share-wrap").classList.remove("visible");
             return;
         }
 
@@ -2169,12 +2194,8 @@
         }
         document.getElementById("vc-connected-room").textContent = label;
 
-        pruneDeadVideoTiles();
         renderVcParticipants();
-
-        const count = document.querySelectorAll("#video-grid .video-tile").length;
-        shareWrap.classList.toggle("visible", count > 0);
-        document.getElementById("video-count").textContent = count > 0 ? count + " stream" + (count !== 1 ? "s" : "") : "";
+        updateScreenShareStrip();
     }
 
     function renderVCRosters() {
@@ -2290,27 +2311,31 @@
     function attachVideoTrack(userId, track, isLocal) {
         if (!track || track.kind !== "video") return;
         if (track.readyState === "ended") {
-            if (!isLocal) removeVideoTile(userId);
+            removeVideoTile(userId);
             return;
         }
+        if (!isLocal && !screenSharers.has(userId)) return;
 
-        ensureVideoTile(userId, isLocal);
-        const videoEl = document.getElementById(`video-${userId}`);
-
-        const bindStream = () => {
+        const showTile = () => {
+            if (track.readyState === "ended") { removeVideoTile(userId); return; }
+            if (!isLocal && !screenSharers.has(userId)) return;
+            ensureVideoTile(userId, isLocal);
+            const videoEl = document.getElementById(`video-${userId}`);
             videoEl.srcObject = new MediaStream([track]);
             videoEl.play().catch(() => {});
+            if (!isLocal) remoteVideoTracks[userId] = track.id;
+            updateScreenShareStrip();
+            updateVcStage();
         };
-        bindStream();
 
-        track.onunmute = bindStream;
+        if (isLocal || !track.muted) showTile();
+        else track.onunmute = showTile;
+
         track.onended = () => {
+            screenSharers.delete(isLocal ? myUsername : userId);
             if (isLocal && isScreenSharing) stopScreenShare(false);
             else removeVideoTile(userId);
         };
-
-        if (!isLocal) remoteVideoTracks[userId] = track.id;
-        updateVcStage();
     }
 
     function syncPeerMedia(userId, pc) {
@@ -2318,8 +2343,9 @@
             const track = transceiver.receiver?.track;
             if (!track) return;
             if (track.kind === "audio") attachAudioTrack(userId, track);
-            else if (track.kind === "video" && track.readyState !== "ended") {
-                attachVideoTrack(userId, track, false);
+            else if (track.kind === "video") {
+                if (track.readyState === "ended") removeVideoTile(userId);
+                else if (screenSharers.has(userId)) attachVideoTrack(userId, track, false);
             }
         });
     }
@@ -2332,6 +2358,7 @@
 
     function handleScreenShareState(username, sharing) {
         if (sharing) {
+            screenSharers.add(username);
             const pc = peerConnections[username];
             if (pc) {
                 syncPeerMedia(username, pc);
@@ -2341,6 +2368,7 @@
             updateVcStage();
             return;
         }
+        screenSharers.delete(username);
         removeVideoTile(username);
         if (fsUserId === username) closeFullscreen();
     }
@@ -2595,6 +2623,7 @@
         delete remoteVideoTracks[userId];
         const tile = document.getElementById(`tile-${userId}`);
         if (tile) tile.remove();
+        updateScreenShareStrip();
         updateVcStage();
     }
 
@@ -2617,6 +2646,7 @@
             await applyScreenCaptureQuality(videoTrack);
 
             isScreenSharing = true;
+            screenSharers.add(myUsername);
             document.getElementById("btn-screen").classList.add("active");
             attachVideoTrack("local", videoTrack, true);
 
@@ -2632,6 +2662,7 @@
         } catch (err) {
             console.error("Screen share cancelled or failed:", err);
             isScreenSharing = false;
+            screenSharers.delete(myUsername);
             document.getElementById("btn-screen").classList.remove("active");
         }
     }
@@ -2642,6 +2673,7 @@
         notifyScreenShareState(false);
 
         isScreenSharing = false;
+        screenSharers.delete(myUsername);
         document.getElementById("btn-screen").classList.remove("active");
 
         for (const [target, pc] of Object.entries(peerConnections)) {
