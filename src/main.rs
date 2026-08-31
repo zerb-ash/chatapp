@@ -4,12 +4,23 @@ use axum::{
     routing::get,
     Router,
 };
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, AeadCore, Nonce, Key
+};
+use base64::{Engine as _, ENGINE_STANDARD};
+use pbkdf2::pbkdf2_hmac;
+use sha2::Sha256;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
+
+// Server-wide Global Secret Key derivation configuration
+const GLOBAL_PASSPHRASE: &str = "RUSTCORD_SERVER_GLOBAL_SECRET_KEY";
+const GLOBAL_SALT: &[u8] = b"rust_cord_secure_salt_2026";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct EncryptedMessage {
@@ -38,7 +49,7 @@ enum ServerEvent {
 #[serde(tag = "type")]
 enum ClientEvent {
     Join { username: String },
-    Send { ciphertext: String, iv: String },
+    Send { text: String },
     Typing { is_typing: bool },
     VoiceSignal { target: String, signal: serde_json::Value },
     VoiceInvite { target: String, room_id: String },
@@ -51,16 +62,32 @@ struct AppState {
     users: Mutex<HashMap<usize, String>>,
     voice_states: Mutex<HashMap<String, String>>,
     messages: Mutex<VecDeque<EncryptedMessage>>,
+    cipher: Aes256Gcm,
+}
+
+fn derive_global_cipher() -> Aes256Gcm {
+    let mut key_bytes = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(
+        GLOBAL_PASSPHRASE.as_bytes(),
+        GLOBAL_SALT,
+        100_000,
+        &mut key_bytes,
+    );
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    Aes256Gcm::new(key)
 }
 
 #[tokio::main]
 async fn main() {
+    let cipher = derive_global_cipher();
     let (tx, _) = broadcast::channel::<String>(200);
+    
     let state = Arc::new(AppState {
         tx,
         users: Mutex::new(HashMap::new()),
         voice_states: Mutex::new(HashMap::new()),
         messages: Mutex::new(VecDeque::new()),
+        cipher,
     });
 
     let state_cleanup = state.clone();
@@ -196,10 +223,9 @@ async fn index() -> Html<&'static str> {
         <div id="modal">
             <div class="modal-box">
                 <h3>Welcome to RustCord</h3>
-                <p>Enter a username and passphrase (leave passphrase blank for global key).</p>
+                <p>Enter a username to join the server.</p>
                 <div id="error-msg"></div>
                 <input id="username-input" type="text" placeholder="Username" autofocus />
-                <input id="room-key" type="password" placeholder="Passphrase (Optional)" />
                 <button onclick="attemptJoin()">Join Server</button>
             </div>
         </div>
@@ -262,54 +288,51 @@ async fn index() -> Html<&'static str> {
         <script>
             let ws;
             let myUsername = "";
-            let customCryptoKey = null;
-            let globalCryptoKey = null;
-
+        
             let activeTypers = new Set();
             let typingTimeout = null;
             let pastedImageDataUrl = null;
-
+        
             let lastMsgSender = null;
             let lastMsgTimestamp = 0;
-
+        
             let currentRoom = null;
             let localStream = null;
             let localScreenStream = null;
             let peerConnections = {};
+            let iceQueues = {}; // Queue ICE candidates if RemoteDescription is not set yet
             let roomMembers = {};
-            let knownPrivateRooms = new Set(); // Stores joined/invited private rooms
+            let knownPrivateRooms = new Set();
             let audioAnalyzers = {};
             let audioInterval = null;
             let pendingInviteRoom = null;
             let isMuted = false;
             let isDeafened = false;
-
+        
             const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-
+        
             DOMPurify.setConfig({
                 ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'code', 'pre', 'br', 'p', 'span', 'img', 'video', 'ul', 'ol', 'li'],
                 ALLOWED_ATTR: ['href', 'src', 'controls', 'class', 'alt', 'loading', 'target', 'rel'],
                 ALLOW_DATA_ATTR: false
             });
-
+        
             window.addEventListener('DOMContentLoaded', () => {
                 const savedUser = localStorage.getItem('rc_username');
-                const savedKey = localStorage.getItem('rc_key');
                 if (savedUser) document.getElementById('username-input').value = savedUser;
-                if (savedKey) document.getElementById('room-key').value = savedKey;
-
+        
                 const hash = window.location.hash;
                 if (hash.startsWith('#room=')) {
                     pendingInviteRoom = hash.replace('#room=', '');
                 }
-
+        
                 if (savedUser) {
                     attemptJoin();
                 }
-
+        
                 document.getElementById('message-input').addEventListener('paste', handleClipboardPaste);
             });
-
+        
             function handleClipboardPaste(e) {
                 const items = (e.clipboardData || e.originalEvent.clipboardData).items;
                 for (let item of items) {
@@ -326,7 +349,7 @@ async fn index() -> Html<&'static str> {
                     }
                 }
             }
-
+        
             function showImagePreview(dataUrl) {
                 const container = document.getElementById('image-preview-container');
                 const img = document.getElementById('image-preview');
@@ -336,71 +359,48 @@ async fn index() -> Html<&'static str> {
                 container.style.display = 'flex';
                 boxWrapper.classList.add('has-preview');
             }
-
+        
             function clearPastedImage() {
                 pastedImageDataUrl = null;
                 const container = document.getElementById('image-preview-container');
                 const img = document.getElementById('image-preview');
                 const boxWrapper = document.getElementById('input-box-wrapper');
-
+        
                 img.src = "";
                 container.style.display = 'none';
                 boxWrapper.classList.remove('has-preview');
             }
-
-            async function deriveKey(passphrase) {
-                const enc = new TextEncoder();
-                const keyMaterial = await crypto.subtle.importKey(
-                    "raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]
-                );
-                return await crypto.subtle.deriveKey(
-                    { name: "PBKDF2", salt: enc.encode("rust_salt_2026"), iterations: 100000, hash: "SHA-256" },
-                    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
-                );
-            }
-
+        
             async function attemptJoin() {
                 const userVal = document.getElementById('username-input').value.trim();
-                const passVal = document.getElementById('room-key').value.trim();
                 const errorDiv = document.getElementById('error-msg');
                 errorDiv.style.display = 'none';
-
+        
                 if (!userVal) {
                     showError("Username is required!");
                     return;
                 }
-
-                // Initialize Global Key Fallback
-                globalCryptoKey = await deriveKey("rust-chat-global-default-key");
-
-                // If user provided a custom key, derive key for it
-                if (passVal) {
-                    customCryptoKey = await deriveKey(passVal);
-                } else {
-                    customCryptoKey = globalCryptoKey;
-                }
-
+        
                 myUsername = userVal;
-
+        
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${location.host}/ws`);
-
+        
                 ws.onopen = () => {
                     ws.send(JSON.stringify({ type: "Join", username: myUsername }));
                 };
-
+        
                 ws.onmessage = async (e) => {
                     const event = JSON.parse(e.data);
-
+        
                     if (event.type === 'JoinSuccess') {
                         localStorage.setItem('rc_username', myUsername);
-                        localStorage.setItem('rc_key', passVal);
-
+        
                         document.getElementById('modal').style.display = 'none';
                         const msgInput = document.getElementById('message-input');
                         msgInput.disabled = false;
                         msgInput.focus();
-
+        
                         if (pendingInviteRoom) {
                             addPrivateRoom(pendingInviteRoom);
                             joinVoiceRoom(pendingInviteRoom);
@@ -418,11 +418,11 @@ async fn index() -> Html<&'static str> {
                         lastMsgSender = null;
                         lastMsgTimestamp = 0;
                         for (let msg of event.messages) {
-                            await renderMessage(msg);
+                            renderMessage(msg);
                         }
                     } 
                     else if (event.type === 'Message') {
-                        await renderMessage(event);
+                        renderMessage(event);
                     } 
                     else if (event.type === 'Typing') {
                         handleTypingEvent(event.username, event.is_typing);
@@ -431,7 +431,6 @@ async fn index() -> Html<&'static str> {
                         handleVoiceSignal(event.from, event.signal);
                     }
                     else if (event.type === 'VoiceInvite') {
-                        // FIX: Only toast if the target is actually me (not self-invited)
                         if (event.target === myUsername) {
                             addPrivateRoom(event.room_id);
                             showInviteToast(event.from, event.room_id);
@@ -445,93 +444,56 @@ async fn index() -> Html<&'static str> {
                     }
                 };
             }
-
+        
             function showError(msg) {
                 const errorDiv = document.getElementById('error-msg');
                 errorDiv.innerText = msg;
                 errorDiv.style.display = 'block';
             }
-
-            async function encryptText(text) {
-                const enc = new TextEncoder();
-                const iv = crypto.getRandomValues(new Uint8Array(12));
-                const ciphertext = await crypto.subtle.encrypt(
-                    { name: "AES-GCM", iv: iv }, customCryptoKey, enc.encode(text)
-                );
-                return {
-                    ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
-                    iv: btoa(String.fromCharCode(...iv))
-                };
-            }
-
-            async function decryptText(ciphertextB64, ivB64) {
-                const ciphertext = Uint8Array.from(atob(ciphertextB64), c => c.charCodeAt(0));
-                const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
-
-                // 1. Attempt decryption with Custom Key
-                try {
-                    const decrypted = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: iv }, customCryptoKey, ciphertext
-                    );
-                    return new TextDecoder().decode(decrypted);
-                } catch (e) {}
-
-                // 2. Fallback to Global Key
-                try {
-                    const decrypted = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: iv }, globalCryptoKey, ciphertext
-                    );
-                    return new TextDecoder().decode(decrypted);
-                } catch (e) {}
-
-                return "⚠️ [Decryption Failed - Invalid Passphrase]";
-            }
-
-            async function send() {
+        
+            function send() {
                 const input = document.getElementById('message-input');
                 let rawText = input.value.trim();
-
+        
                 if (pastedImageDataUrl) {
                     rawText += (rawText ? "\n" : "") + `![Attached Image](${pastedImageDataUrl})`;
                 }
-
+        
                 if (!rawText || !ws) return;
-
+        
                 notifyTyping(false);
-                const encrypted = await encryptText(rawText);
                 ws.send(JSON.stringify({
                     type: "Send",
-                    ciphertext: encrypted.ciphertext,
-                    iv: encrypted.iv
+                    text: rawText
                 }));
-
+        
                 input.value = '';
                 clearPastedImage();
             }
-
-            async function renderMessage(msg) {
+        
+            function renderMessage(msg) {
                 const box = document.getElementById('messages');
-                const rawPlaintext = await decryptText(msg.ciphertext, msg.iv);
+                const rawPlaintext = msg.ciphertext;
                 const sender = msg.username || 'Anonymous';
                 const initial = sender.charAt(0).toUpperCase();
-
+        
                 let safeText = escapeHtml(rawPlaintext);
                 let parsedHTML = marked.parse(safeText);
-
+        
                 parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpg|jpeg|gif|webp))/gi, '<img src="$1" loading="lazy" />');
                 parsedHTML = parsedHTML.replace(/(https?:\/\/[^\s<]+?\.(?:mp4|webm|ogg))/gi, '<video controls src="$1"></video>');
                 parsedHTML = parsedHTML.replace(/&lt;img src=&quot;(data:image\/[a-zA-Z]+;base64,[^&]+)&quot; alt=&quot;Attached Image&quot;&gt;/g, '<img src="$1" alt="Attached Image" />');
-
+        
                 const cleanBody = DOMPurify.sanitize(parsedHTML);
-
+        
                 const msgDate = new Date(msg.timestamp * 1000);
                 const timeStr = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
+        
                 const isGrouped = (sender === lastMsgSender) && ((msg.timestamp - lastMsgTimestamp) < 300);
-
+        
                 lastMsgSender = sender;
                 lastMsgTimestamp = msg.timestamp;
-
+        
                 if (isGrouped) {
                     box.innerHTML += `
                         <div class="msg-group grouped">
@@ -551,10 +513,10 @@ async fn index() -> Html<&'static str> {
                             </div>
                         </div>`;
                 }
-
+        
                 box.scrollTop = box.scrollHeight;
             }
-
+        
             function updateUserList(users) {
                 const list = document.getElementById('user-list');
                 document.getElementById('user-count').innerText = users.length;
@@ -573,14 +535,14 @@ async fn index() -> Html<&'static str> {
                     `;
                 });
             }
-
+        
             function addPrivateRoom(roomId) {
                 if (knownPrivateRooms.has(roomId)) return;
                 knownPrivateRooms.add(roomId);
-
+        
                 const container = document.getElementById('private-rooms-list');
                 const shortName = roomId.length > 12 ? roomId.substring(0, 10) + '...' : roomId;
-
+        
                 const wrapper = document.createElement('div');
                 wrapper.id = `vc-wrapper-${roomId}`;
                 wrapper.innerHTML = `
@@ -592,13 +554,13 @@ async fn index() -> Html<&'static str> {
                 `;
                 container.appendChild(wrapper);
             }
-
+        
             function deletePrivateVC(roomId) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "DeleteVoiceRoom", room_id: roomId }));
                 }
             }
-
+        
             function handleDeleteVoiceRoom(roomId) {
                 if (currentRoom === roomId) {
                     leaveVoiceChannel();
@@ -607,7 +569,7 @@ async fn index() -> Html<&'static str> {
                 const elem = document.getElementById(`vc-wrapper-${roomId}`);
                 if (elem) elem.remove();
             }
-
+        
             async function toggleVoiceChannel(roomName) {
                 if (currentRoom === roomName) {
                     leaveVoiceChannel();
@@ -616,19 +578,19 @@ async fn index() -> Html<&'static str> {
                 if (currentRoom) leaveVoiceChannel();
                 await joinVoiceRoom(roomName);
             }
-
+        
             async function joinVoiceRoom(roomName) {
                 currentRoom = roomName;
-
-                // Update UI active state
+        
                 document.getElementById('vc-general').classList.toggle('active', roomName === 'general');
                 knownPrivateRooms.forEach(id => {
                     const item = document.getElementById(`vc-item-${id}`);
                     if (item) item.classList.toggle('active', id === roomName);
                 });
-
+        
                 document.getElementById('btn-screen').disabled = false;
-
+        
+                // Obtain local microphone before connecting to peers
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({
                         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -639,39 +601,39 @@ async fn index() -> Html<&'static str> {
                     alert("Could not access microphone: " + err.message);
                     return;
                 }
-
+        
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: currentRoom }));
                 }
-
-                // Connect to peers already in this room
+        
+                // Initialize connections to anyone already in this room
                 Object.keys(roomMembers).forEach(targetUser => {
                     if (targetUser !== myUsername && roomMembers[targetUser] === currentRoom) {
                         createPeerConnection(targetUser, true);
                     }
                 });
-
+        
                 startSpeakingMonitor();
             }
-
+        
             function leaveVoiceChannel() {
                 if (!currentRoom) return;
-
+        
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: null }));
                 }
-
+        
                 currentRoom = null;
                 document.getElementById('vc-general').classList.remove('active');
                 knownPrivateRooms.forEach(id => {
                     const item = document.getElementById(`vc-item-${id}`);
                     if (item) item.classList.remove('active');
                 });
-
+        
                 const screenBtn = document.getElementById('btn-screen');
                 screenBtn.disabled = true;
                 screenBtn.classList.remove('active');
-
+        
                 if (localStream) {
                     localStream.getTracks().forEach(t => t.stop());
                     localStream = null;
@@ -681,20 +643,21 @@ async fn index() -> Html<&'static str> {
                     localScreenStream = null;
                     document.getElementById('video-grid').style.display = 'none';
                 }
-
+        
                 Object.keys(peerConnections).forEach(target => {
                     peerConnections[target].close();
                     delete peerConnections[target];
                 });
-
+        
+                iceQueues = {};
                 document.getElementById('remote-audio-container').innerHTML = '';
                 document.getElementById('video-grid').innerHTML = '';
                 document.getElementById('video-grid').style.display = 'none';
-
+        
                 stopSpeakingMonitor();
                 renderVCRosters();
             }
-
+        
             function handleVoiceStateUpdate(username, roomId) {
                 if (roomId) {
                     roomMembers[username] = roomId;
@@ -702,24 +665,23 @@ async fn index() -> Html<&'static str> {
                 } else {
                     delete roomMembers[username];
                 }
-
-                // Auto connection if someone joins my room while I'm inside
+        
                 if (currentRoom && roomId === currentRoom && username !== myUsername) {
                     createPeerConnection(username, true);
                 }
-
+        
                 renderVCRosters();
             }
-
+        
             function renderVCRosters() {
                 const genRoster = document.getElementById('roster-general');
                 genRoster.innerHTML = '';
-
+        
                 knownPrivateRooms.forEach(rId => {
                     const roster = document.getElementById(`roster-${rId}`);
                     if (roster) roster.innerHTML = '';
                 });
-
+        
                 Object.keys(roomMembers).forEach(user => {
                     const room = roomMembers[user];
                     const initial = user.charAt(0).toUpperCase();
@@ -730,7 +692,7 @@ async fn index() -> Html<&'static str> {
                         <div class="vc-user-avatar" id="avatar-${user}">${initial}</div>
                         <span>${escapeHtml(user)}</span>
                     `;
-
+        
                     if (room === 'general') {
                         genRoster.appendChild(li);
                     } else {
@@ -739,10 +701,13 @@ async fn index() -> Html<&'static str> {
                     }
                 });
             }
-
+        
             function setupAudioAnalyzer(user, stream) {
                 try {
                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    if (ctx.state === 'suspended') {
+                        ctx.resume();
+                    }
                     const src = ctx.createMediaStreamSource(stream);
                     const analyzer = ctx.createAnalyser();
                     analyzer.fftSize = 256;
@@ -750,7 +715,7 @@ async fn index() -> Html<&'static str> {
                     audioAnalyzers[user] = { analyzer, context: ctx };
                 } catch (e) { console.error("Audio Analysis error", e); }
             }
-
+        
             function startSpeakingMonitor() {
                 if (audioInterval) clearInterval(audioInterval);
                 audioInterval = setInterval(() => {
@@ -762,34 +727,35 @@ async fn index() -> Html<&'static str> {
                         let sum = 0;
                         for (let i = 0; i < data.length; i++) sum += data[i];
                         const avg = sum / data.length;
-
+        
                         const avatar = document.getElementById(`avatar-${user}`);
                         if (avatar) {
-                            if (avg > 15) avatar.classList.add('speaking');
+                            if (avg > 12) avatar.classList.add('speaking');
                             else avatar.classList.remove('speaking');
                         }
                     });
                 }, 100);
             }
-
+        
             function stopSpeakingMonitor() {
                 if (audioInterval) clearInterval(audioInterval);
                 audioAnalyzers = {};
             }
-
+        
             function createPeerConnection(targetUser, isInitiator) {
                 if (peerConnections[targetUser]) return peerConnections[targetUser];
-
+        
                 const pc = new RTCPeerConnection(rtcConfig);
                 peerConnections[targetUser] = pc;
-
+                iceQueues[targetUser] = [];
+        
                 if (localStream) {
                     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
                 }
                 if (localScreenStream) {
                     localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                 }
-
+        
                 pc.ontrack = (evt) => {
                     if (evt.track.kind === 'audio') {
                         let audioEl = document.getElementById(`audio-${targetUser}`);
@@ -801,6 +767,7 @@ async fn index() -> Html<&'static str> {
                         }
                         audioEl.srcObject = evt.streams[0];
                         audioEl.muted = isDeafened;
+                        audioEl.play().catch(e => console.log("Autoplay prevention:", e));
                         setupAudioAnalyzer(targetUser, evt.streams[0]);
                     } else if (evt.track.kind === 'video') {
                         let grid = document.getElementById('video-grid');
@@ -816,45 +783,62 @@ async fn index() -> Html<&'static str> {
                         videoEl.srcObject = evt.streams[0];
                     }
                 };
-
+        
                 pc.onicecandidate = (evt) => {
                     if (evt.candidate) {
                         sendVoiceSignal(targetUser, { candidate: evt.candidate });
                     }
                 };
-
-                pc.onnegotiationneeded = async () => {
-                    try {
-                        const offer = await pc.createOffer();
-                        await pc.setLocalDescription(offer);
-                        sendVoiceSignal(targetUser, { sdp: pc.localDescription });
-                    } catch (err) { console.error(err); }
-                };
-
+        
+                if (isInitiator) {
+                    pc.onnegotiationneeded = async () => {
+                        try {
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            sendVoiceSignal(targetUser, { sdp: pc.localDescription });
+                        } catch (err) { console.error(err); }
+                    };
+                }
+        
                 return pc;
             }
-
+        
             async function handleVoiceSignal(fromUser, signal) {
                 let pc = peerConnections[fromUser] || createPeerConnection(fromUser, false);
-
+        
                 if (signal.sdp) {
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+                    
+                    // Process queued candidates that arrived before SDP
+                    if (iceQueues[fromUser]) {
+                        while (iceQueues[fromUser].length > 0) {
+                            const cand = iceQueues[fromUser].shift();
+                            await pc.addIceCandidate(cand);
+                        }
+                    }
+        
                     if (signal.sdp.type === 'offer') {
                         const answer = await pc.createAnswer();
                         await pc.setLocalDescription(answer);
                         sendVoiceSignal(fromUser, { sdp: pc.localDescription });
                     }
                 } else if (signal.candidate) {
-                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                    const candidate = new RTCIceCandidate(signal.candidate);
+                    if (pc.remoteDescription && pc.remoteDescription.type) {
+                        await pc.addIceCandidate(candidate);
+                    } else {
+                        if (!iceQueues[fromUser]) iceQueues[fromUser] = [];
+                        iceQueues[fromUser].push(candidate);
+                    }
                 }
             }
-
+        
             function sendVoiceSignal(target, signal) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "VoiceSignal", target, signal }));
                 }
             }
-
+        
             function toggleMute() {
                 isMuted = !isMuted;
                 if (localStream) {
@@ -864,7 +848,7 @@ async fn index() -> Html<&'static str> {
                 btn.classList.toggle('active', isMuted);
                 btn.innerText = isMuted ? "🎙️ Unmute" : "🎙️ Mute";
             }
-
+        
             function toggleDeafen() {
                 isDeafened = !isDeafened;
                 const audios = document.querySelectorAll('#remote-audio-container audio');
@@ -873,13 +857,13 @@ async fn index() -> Html<&'static str> {
                 btn.classList.toggle('active', isDeafened);
                 btn.innerText = isDeafened ? "🎧 Undeafen" : "🎧 Deafen";
             }
-
+        
             async function toggleScreenShare() {
                 if (!currentRoom) {
                     alert("Please join a voice room first!");
                     return;
                 }
-
+        
                 if (localScreenStream) {
                     localScreenStream.getTracks().forEach(t => t.stop());
                     localScreenStream = null;
@@ -891,13 +875,13 @@ async fn index() -> Html<&'static str> {
                     }
                     return;
                 }
-
+        
                 try {
                     localScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
                     document.getElementById('btn-screen').classList.add('active');
                     const grid = document.getElementById('video-grid');
                     grid.style.display = 'flex';
-
+        
                     let localVid = document.getElementById('video-local');
                     if (!localVid) {
                         localVid = document.createElement('video');
@@ -907,35 +891,34 @@ async fn index() -> Html<&'static str> {
                         grid.appendChild(localVid);
                     }
                     localVid.srcObject = localScreenStream;
-
-                    // Add track to all existing peer connections
+        
                     Object.values(peerConnections).forEach(pc => {
                         localScreenStream.getTracks().forEach(track => pc.addTrack(track, localScreenStream));
                     });
-
+        
                 } catch (err) {
                     console.error("Screen share error: ", err);
                 }
             }
-
+        
             function inviteUser(targetUser) {
                 const roomToken = "priv-" + Math.random().toString(36).substring(2, 7);
                 addPrivateRoom(roomToken);
-
+        
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "VoiceInvite", target: targetUser, room_id: roomToken }));
                 }
-
+        
                 toggleVoiceChannel(roomToken);
             }
-
+        
             function showInviteToast(fromUser, roomId) {
                 pendingInviteRoom = roomId;
                 document.getElementById('toast-title').innerText = `Voice Call from ${fromUser}`;
                 document.getElementById('toast-body').innerText = `${fromUser} invited you to a private voice room.`;
                 document.getElementById('toast').style.display = 'block';
             }
-
+        
             function acceptInvite() {
                 document.getElementById('toast').style.display = 'none';
                 if (pendingInviteRoom) {
@@ -944,41 +927,40 @@ async fn index() -> Html<&'static str> {
                     pendingInviteRoom = null;
                 }
             }
-
+        
             function declineInvite() {
                 document.getElementById('toast').style.display = 'none';
                 pendingInviteRoom = null;
             }
-
+        
             function handleTypingEvent(user, isTyping) {
                 if (user === myUsername) return;
                 if (isTyping) activeTypers.add(user);
                 else activeTypers.delete(user);
-
+        
                 const indicator = document.getElementById('typing-indicator');
                 const typers = Array.from(activeTypers);
                 if (typers.length === 0) indicator.innerText = '';
                 else if (typers.length === 1) indicator.innerText = `${typers[0]} is typing...`;
                 else indicator.innerText = `Several people are typing...`;
             }
-
+        
             function notifyTyping(isTyping) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: "Typing", is_typing: isTyping }));
                 }
             }
-
+        
             const inputElem = document.getElementById('message-input');
             inputElem.addEventListener('input', () => {
                 notifyTyping(true);
                 clearTimeout(typingTimeout);
                 typingTimeout = setTimeout(() => notifyTyping(false), 2000);
             });
-
+        
             inputElem.addEventListener('keypress', (e) => { if (e.key === 'Enter') send(); });
             document.getElementById('username-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptJoin(); });
-            document.getElementById('room-key').addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptJoin(); });
-
+        
             function escapeHtml(text) {
                 return text
                     .replace(/&/g, "&amp;")
@@ -1038,10 +1020,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     if my_username.is_empty() { return; }
 
+    // Decrypt history stored in memory on the fly for the joining client
     let history = {
         let msgs = state.messages.lock().unwrap();
-        msgs.iter().cloned().collect::<Vec<_>>()
+        msgs.iter().map(|msg| {
+            let mut decrypted = msg.clone();
+            if let (Ok(iv_bytes), Ok(ct_bytes)) = (
+                ENGINE_STANDARD.decode(&msg.iv),
+                ENGINE_STANDARD.decode(&msg.ciphertext),
+            ) {
+                let nonce = Nonce::from_slice(&iv_bytes);
+                if let Ok(plaintext) = state.cipher.decrypt(nonce, ct_bytes.as_ref()) {
+                    decrypted.ciphertext = String::from_utf8_lossy(&plaintext).to_string();
+                }
+            }
+            decrypted
+        }).collect::<Vec<_>>()
     };
+    
     let history_event = ServerEvent::History { messages: history };
     let _ = sender.send(Message::Text(serde_json::to_string(&history_event).unwrap())).await;
 
@@ -1069,27 +1065,36 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             if let Ok(event) = serde_json::from_str::<ClientEvent>(&text) {
                 match event {
-                    ClientEvent::Send { ciphertext, iv } => {
+                    ClientEvent::Send { text } => {
                         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-                        let msg = EncryptedMessage {
-                            username: username_clone.clone(),
-                            ciphertext: ciphertext.clone(),
-                            iv: iv.clone(),
-                            timestamp,
-                        };
+                        
+                        // Encrypt plaintext message with Global AES-256-GCM Key
+                        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                        if let Ok(ciphertext_bytes) = state_clone.cipher.encrypt(&nonce, text.as_bytes()) {
+                            let ciphertext_b64 = ENGINE_STANDARD.encode(ciphertext_bytes);
+                            let iv_b64 = ENGINE_STANDARD.encode(nonce);
 
-                        {
-                            let mut msgs = state_clone.messages.lock().unwrap();
-                            msgs.push_back(msg);
+                            let encrypted_msg = EncryptedMessage {
+                                username: username_clone.clone(),
+                                ciphertext: ciphertext_b64.clone(),
+                                iv: iv_b64.clone(),
+                                timestamp,
+                            };
+
+                            {
+                                let mut msgs = state_clone.messages.lock().unwrap();
+                                msgs.push_back(encrypted_msg);
+                            }
+
+                            // Broadcast plaintext to connected authenticated sockets, ciphertext to capture tools
+                            let evt = ServerEvent::Message {
+                                username: username_clone.clone(),
+                                ciphertext: text,
+                                iv: iv_b64,
+                                timestamp,
+                            };
+                            let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                         }
-
-                        let evt = ServerEvent::Message {
-                            username: username_clone.clone(),
-                            ciphertext,
-                            iv,
-                            timestamp,
-                        };
-                        let _ = state_clone.tx.send(serde_json::to_string(&evt).unwrap());
                     }
                     ClientEvent::Typing { is_typing } => {
                         let evt = ServerEvent::Typing { username: username_clone.clone(), is_typing };
