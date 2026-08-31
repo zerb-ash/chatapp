@@ -260,7 +260,8 @@
     let localScreenStream = null;
     let peerConnections = {};
     let iceQueues = {};
-    let videoTransceivers = {};
+    let screenShareSenders = {};
+    let remoteVideoTracks = {};
     let roomMembers = {};
     let knownPrivateRooms = new Set();
     let localAnalyzer = null;
@@ -617,7 +618,8 @@
             peerConnections[target].close();
             delete peerConnections[target];
             delete iceQueues[target];
-            delete videoTransceivers[target];
+            delete screenShareSenders[target];
+            delete remoteVideoTracks[target];
         });
 
         document.getElementById("remote-audio-container").innerHTML = "";
@@ -638,7 +640,8 @@
                 peerConnections[username].close();
                 delete peerConnections[username];
                 delete iceQueues[username];
-                delete videoTransceivers[username];
+                delete screenShareSenders[username];
+                delete remoteVideoTracks[username];
             }
             const audioEl = document.getElementById(`audio-${username}`);
             if (audioEl) audioEl.remove();
@@ -728,8 +731,87 @@
         lastSpeakingSent = false;
     }
 
-    // --- WebRTC (perfect negotiation + transceivers for screen share) ---
+    // --- WebRTC (perfect negotiation; addTrack for screen share) ---
     function isPolite(targetUser) { return myUsername > targetUser; }
+
+    function attachAudioTrack(userId, track) {
+        if (!track || track.kind !== "audio") return;
+        let audioEl = document.getElementById(`audio-${userId}`);
+        if (!audioEl) {
+            audioEl = document.createElement("audio");
+            audioEl.id = `audio-${userId}`;
+            audioEl.autoplay = true;
+            document.getElementById("remote-audio-container").appendChild(audioEl);
+        }
+        audioEl.srcObject = new MediaStream([track]);
+        audioEl.muted = isDeafened;
+        audioEl.play().catch(() => {});
+    }
+
+    function ensureVideoTile(userId, isLocal) {
+        if (document.getElementById(`tile-${userId}`)) return;
+        const grid = document.getElementById("video-grid");
+        const tile = document.createElement("div");
+        tile.className = "video-tile";
+        tile.id = `tile-${userId}`;
+        const label = isLocal ? "You (sharing)" : userId;
+        tile.innerHTML = `
+            <video id="video-${userId}" autoplay playsinline ${isLocal ? "muted" : ""}></video>
+            <span class="tile-label">${escapeHtml(label)}</span>
+            <div class="tile-controls">
+                <button class="tile-btn" onclick="openFullscreen('${userId}')" title="Fullscreen">⛶</button>
+            </div>`;
+        grid.appendChild(tile);
+    }
+
+    function attachVideoTrack(userId, track, isLocal) {
+        if (!track || track.kind !== "video") return;
+        if (track.readyState === "ended") {
+            if (!isLocal) removeVideoTile(userId);
+            return;
+        }
+
+        ensureVideoTile(userId, isLocal);
+        const videoEl = document.getElementById(`video-${userId}`);
+        const stream = new MediaStream([track]);
+        videoEl.srcObject = stream;
+
+        const tryPlay = () => videoEl.play().catch(() => {});
+        tryPlay();
+
+        track.onunmute = tryPlay;
+        track.onended = () => {
+            if (isLocal && isScreenSharing) stopScreenShare(false);
+            else removeVideoTile(userId);
+        };
+
+        if (!isLocal) remoteVideoTracks[userId] = track.id;
+        updateVideoStage();
+    }
+
+    function syncPeerMedia(userId, pc) {
+        pc.getReceivers().forEach(receiver => {
+            if (!receiver.track) return;
+            if (receiver.track.kind === "audio") attachAudioTrack(userId, receiver.track);
+            else if (receiver.track.kind === "video" && remoteVideoTracks[userId] !== receiver.track.id) {
+                attachVideoTrack(userId, receiver.track, false);
+            }
+        });
+    }
+
+    function addScreenShareToPeer(targetUser, pc) {
+        if (!localScreenStream || screenShareSenders[targetUser]) return;
+        const videoTrack = localScreenStream.getVideoTracks()[0];
+        if (!videoTrack) return;
+        screenShareSenders[targetUser] = pc.addTrack(videoTrack, localScreenStream);
+    }
+
+    function removeScreenShareFromPeer(targetUser, pc) {
+        const sender = screenShareSenders[targetUser];
+        if (!sender) return;
+        try { pc.removeTrack(sender); } catch (e) { console.error(e); }
+        delete screenShareSenders[targetUser];
+    }
 
     function createPeerConnection(targetUser) {
         if (peerConnections[targetUser]) return peerConnections[targetUser];
@@ -741,38 +823,16 @@
         iceQueues[targetUser] = [];
 
         const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
-        const videoTransceiver = pc.addTransceiver("video", { direction: "sendrecv" });
-        videoTransceivers[targetUser] = videoTransceiver;
-
         if (localStream) {
             const audioTrack = localStream.getAudioTracks()[0];
             if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
         }
-        if (localScreenStream) {
-            const videoTrack = localScreenStream.getVideoTracks()[0];
-            if (videoTrack) videoTransceiver.sender.replaceTrack(videoTrack);
-        }
+
+        if (localScreenStream) addScreenShareToPeer(targetUser, pc);
 
         pc.ontrack = (evt) => {
-            if (evt.track.kind === "audio") {
-                let audioEl = document.getElementById(`audio-${targetUser}`);
-                if (!audioEl) {
-                    audioEl = document.createElement("audio");
-                    audioEl.id = `audio-${targetUser}`;
-                    audioEl.autoplay = true;
-                    document.getElementById("remote-audio-container").appendChild(audioEl);
-                }
-                audioEl.srcObject = evt.streams[0];
-                audioEl.muted = isDeafened;
-                audioEl.play().catch(() => {});
-            } else if (evt.track.kind === "video") {
-                if (evt.track.readyState === "ended") {
-                    removeVideoTile(targetUser);
-                    return;
-                }
-                addVideoTile(targetUser, evt.streams[0], false);
-                evt.track.onended = () => removeVideoTile(targetUser);
-            }
+            if (evt.track.kind === "audio") attachAudioTrack(targetUser, evt.track);
+            else if (evt.track.kind === "video") attachVideoTrack(targetUser, evt.track, false);
         };
 
         pc.onicecandidate = (evt) => {
@@ -792,9 +852,7 @@
         };
 
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === "failed") {
-                pc.restartIce();
-            }
+            if (pc.connectionState === "failed") pc.restartIce();
         };
 
         return pc;
@@ -833,6 +891,10 @@
                 await pc.setLocalDescription();
                 sendVoiceSignal(fromUser, { sdp: pc.localDescription });
             }
+
+            syncPeerMedia(fromUser, pc);
+            setTimeout(() => syncPeerMedia(fromUser, pc), 300);
+            setTimeout(() => syncPeerMedia(fromUser, pc), 1000);
         } else if (signal.candidate) {
             const candidate = new RTCIceCandidate(signal.candidate);
             if (pc.remoteDescription && pc.remoteDescription.type) {
@@ -871,28 +933,8 @@
     }
 
     // --- Screen share ---
-    function addVideoTile(userId, stream, isLocal) {
-        const grid = document.getElementById("video-grid");
-        let tile = document.getElementById(`tile-${userId}`);
-        if (!tile) {
-            tile = document.createElement("div");
-            tile.className = "video-tile";
-            tile.id = `tile-${userId}`;
-            const label = isLocal ? "You (sharing)" : userId;
-            tile.innerHTML = `
-                <video id="video-${userId}" autoplay playsinline ${isLocal ? "muted" : ""}></video>
-                <span class="tile-label">${escapeHtml(label)}</span>
-                <div class="tile-controls">
-                    <button class="tile-btn" onclick="openFullscreen('${userId}')" title="Fullscreen">⛶</button>
-                </div>`;
-            grid.appendChild(tile);
-        }
-        const videoEl = document.getElementById(`video-${userId}`);
-        videoEl.srcObject = stream;
-        updateVideoStage();
-    }
-
     function removeVideoTile(userId) {
+        delete remoteVideoTracks[userId];
         const tile = document.getElementById(`tile-${userId}`);
         if (tile) tile.remove();
         updateVideoStage();
@@ -918,55 +960,41 @@
                 video: { cursor: "always" },
                 audio: false
             });
+
+            const videoTrack = localScreenStream.getVideoTracks()[0];
+            if (!videoTrack) throw new Error("No video track from screen capture");
+            videoTrack.contentHint = "detail";
+
             isScreenSharing = true;
             document.getElementById("btn-screen").classList.add("active");
-
-            addVideoTile("local", localScreenStream, true);
-
-            localScreenStream.getVideoTracks()[0].onended = () => stopScreenShare(true);
+            attachVideoTrack("local", videoTrack, true);
 
             for (const [target, pc] of Object.entries(peerConnections)) {
-                const vt = videoTransceivers[target];
-                if (vt) {
-                    await vt.sender.replaceTrack(localScreenStream.getVideoTracks()[0]);
-                    try {
-                        pc.makingOffer = true;
-                        await pc.setLocalDescription();
-                        sendVoiceSignal(target, { sdp: pc.localDescription });
-                    } catch (e) { console.error(e); }
-                    finally { pc.makingOffer = false; }
-                }
+                addScreenShareToPeer(target, pc);
             }
         } catch (err) {
             console.error("Screen share cancelled or failed:", err);
+            isScreenSharing = false;
+            document.getElementById("btn-screen").classList.remove("active");
         }
     }
 
-    async function stopScreenShare(manual) {
+    function stopScreenShare(manual) {
         if (!isScreenSharing && !localScreenStream) return;
         isScreenSharing = false;
         document.getElementById("btn-screen").classList.remove("active");
+
+        for (const [target, pc] of Object.entries(peerConnections)) {
+            removeScreenShareFromPeer(target, pc);
+        }
+        screenShareSenders = {};
+        remoteVideoTracks = {};
 
         if (localScreenStream) {
             localScreenStream.getTracks().forEach(t => t.stop());
             localScreenStream = null;
         }
         removeVideoTile("local");
-
-        for (const [target, pc] of Object.entries(peerConnections)) {
-            const vt = videoTransceivers[target];
-            if (vt) {
-                await vt.sender.replaceTrack(null);
-                if (manual) {
-                    try {
-                        pc.makingOffer = true;
-                        await pc.setLocalDescription();
-                        sendVoiceSignal(target, { sdp: pc.localDescription });
-                    } catch (e) { console.error(e); }
-                    finally { pc.makingOffer = false; }
-                }
-            }
-        }
     }
 
     function openFullscreen(userId) {
