@@ -894,10 +894,6 @@
             document.addEventListener("click", (e) => {
                 const pop = document.getElementById("_xPop");
                 if (pop && pop.classList.contains("open") && !pop.contains(e.target) && !e.target.closest("[data-x-pop]")) _xClosePop();
-                const modal = document.getElementById("_xModal");
-                if (modal && modal.classList.contains("open") && e.target.closest("#_xModalBox [data-act]")) {
-                    _xHandleAct(e.target.closest("[data-act]"));
-                }
             });
         }
     }
