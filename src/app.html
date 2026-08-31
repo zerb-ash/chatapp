@@ -313,6 +313,7 @@
     let iceQueues = {};
     let screenShareSenders = {};
     let remoteVideoTracks = {};
+    let videoTransceivers = {};
     let roomMembers = {};
     let knownPrivateRooms = new Set();
     let localAnalyzer = null;
@@ -332,9 +333,9 @@
     };
 
     const screenShareCapture = {
-        width: { ideal: 1920, max: 1920 },
-        height: { ideal: 1080, max: 1080 },
-        frameRate: { ideal: 60, max: 60 },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 60 },
         cursor: "always"
     };
 
@@ -688,6 +689,7 @@
             delete iceQueues[target];
             delete screenShareSenders[target];
             delete remoteVideoTracks[target];
+            delete videoTransceivers[target];
         });
 
         document.getElementById("remote-audio-container").innerHTML = "";
@@ -710,6 +712,7 @@
                 delete iceQueues[username];
                 delete screenShareSenders[username];
                 delete remoteVideoTracks[username];
+                delete videoTransceivers[username];
             }
             const audioEl = document.getElementById(`audio-${username}`);
             if (audioEl) audioEl.remove();
@@ -841,13 +844,14 @@
 
         ensureVideoTile(userId, isLocal);
         const videoEl = document.getElementById(`video-${userId}`);
-        const stream = new MediaStream([track]);
-        videoEl.srcObject = stream;
 
-        const tryPlay = () => videoEl.play().catch(() => {});
-        tryPlay();
+        const bindStream = () => {
+            videoEl.srcObject = new MediaStream([track]);
+            videoEl.play().catch(() => {});
+        };
+        bindStream();
 
-        track.onunmute = tryPlay;
+        track.onunmute = bindStream;
         track.onended = () => {
             if (isLocal && isScreenSharing) stopScreenShare(false);
             else removeVideoTile(userId);
@@ -858,18 +862,14 @@
     }
 
     function syncPeerMedia(userId, pc) {
-        let hasLiveVideo = false;
-        pc.getReceivers().forEach(receiver => {
-            if (!receiver.track) return;
-            if (receiver.track.kind === "audio") attachAudioTrack(userId, receiver.track);
-            else if (receiver.track.kind === "video" && receiver.track.readyState === "live") {
-                hasLiveVideo = true;
-                if (remoteVideoTracks[userId] !== receiver.track.id) {
-                    attachVideoTrack(userId, receiver.track, false);
-                }
+        pc.getTransceivers().forEach(transceiver => {
+            const track = transceiver.receiver?.track;
+            if (!track) return;
+            if (track.kind === "audio") attachAudioTrack(userId, track);
+            else if (track.kind === "video" && track.readyState !== "ended") {
+                attachVideoTrack(userId, track, false);
             }
         });
-        if (!hasLiveVideo && remoteVideoTracks[userId]) removeVideoTile(userId);
     }
 
     function notifyScreenShareState(sharing) {
@@ -884,13 +884,33 @@
         if (fsUserId === username) closeFullscreen();
     }
 
-    function addScreenShareToPeer(targetUser, pc) {
+    async function addScreenShareToPeer(targetUser, pc) {
         if (!localScreenStream || screenShareSenders[targetUser]) return;
         const videoTrack = localScreenStream.getVideoTracks()[0];
         if (!videoTrack) return;
-        const sender = pc.addTrack(videoTrack, localScreenStream);
-        screenShareSenders[targetUser] = sender;
-        applyScreenShareEncoding(sender);
+
+        let vt = videoTransceivers[targetUser];
+        if (!vt) {
+            vt = pc.addTransceiver("video", { direction: "sendonly" });
+            videoTransceivers[targetUser] = vt;
+        } else {
+            vt.direction = "sendonly";
+        }
+
+        await vt.sender.replaceTrack(videoTrack);
+        screenShareSenders[targetUser] = vt.sender;
+        await applyScreenShareEncoding(vt.sender);
+    }
+
+    async function removeScreenShareFromPeer(targetUser, pc) {
+        const sender = screenShareSenders[targetUser];
+        const vt = videoTransceivers[targetUser];
+        if (!sender && !vt) return;
+
+        if (sender) await sender.replaceTrack(null);
+        if (vt) vt.direction = "inactive";
+
+        delete screenShareSenders[targetUser];
     }
 
     async function applyScreenCaptureQuality(track) {
@@ -930,13 +950,6 @@
         }
     }
 
-    function removeScreenShareFromPeer(targetUser, pc) {
-        const sender = screenShareSenders[targetUser];
-        if (!sender) return;
-        try { pc.removeTrack(sender); } catch (e) { console.error(e); }
-        delete screenShareSenders[targetUser];
-    }
-
     function createPeerConnection(targetUser) {
         if (peerConnections[targetUser]) return peerConnections[targetUser];
 
@@ -951,6 +964,8 @@
             const audioTrack = localStream.getAudioTracks()[0];
             if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
         }
+
+        videoTransceivers[targetUser] = pc.addTransceiver("video", { direction: "inactive" });
 
         if (localScreenStream) addScreenShareToPeer(targetUser, pc);
 
@@ -1018,8 +1033,9 @@
             }
 
             syncPeerMedia(fromUser, pc);
-            setTimeout(() => syncPeerMedia(fromUser, pc), 300);
-            setTimeout(() => syncPeerMedia(fromUser, pc), 1000);
+            setTimeout(() => syncPeerMedia(fromUser, pc), 250);
+            setTimeout(() => syncPeerMedia(fromUser, pc), 800);
+            setTimeout(() => syncPeerMedia(fromUser, pc), 2000);
         } else if (signal.candidate) {
             const candidate = new RTCIceCandidate(signal.candidate);
             if (pc.remoteDescription && pc.remoteDescription.type) {
@@ -1095,7 +1111,7 @@
             attachVideoTrack("local", videoTrack, true);
 
             for (const [target, pc] of Object.entries(peerConnections)) {
-                addScreenShareToPeer(target, pc);
+                await addScreenShareToPeer(target, pc);
             }
             setTimeout(refreshAllScreenEncodings, 500);
             setTimeout(refreshAllScreenEncodings, 2000);
@@ -1108,7 +1124,7 @@
         }
     }
 
-    function stopScreenShare(manual) {
+    async function stopScreenShare(manual) {
         if (!isScreenSharing && !localScreenStream) return;
 
         notifyScreenShareState(false);
@@ -1117,7 +1133,7 @@
         document.getElementById("btn-screen").classList.remove("active");
 
         for (const [target, pc] of Object.entries(peerConnections)) {
-            removeScreenShareFromPeer(target, pc);
+            await removeScreenShareFromPeer(target, pc);
         }
         screenShareSenders = {};
 
