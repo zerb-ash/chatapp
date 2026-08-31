@@ -116,6 +116,7 @@ enum ServerEvent {
         group_id: String,
         channel_id: String,
         count: usize,
+        viewers: Vec<String>,
     },
     CloseVoteUpdate {
         group_id: String,
@@ -293,24 +294,33 @@ fn hub_group_info(state: &AppState) -> GroupInfo {
     }
 }
 
-fn channel_viewer_count(state: &AppState, group_id: &str, channel_id: &str) -> usize {
+fn channel_viewers(state: &AppState, group_id: &str, channel_id: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
     state
         .conn_states
         .lock()
         .unwrap()
         .values()
         .filter(|c| c.group_id == group_id && c.channel_id == channel_id)
-        .count()
+        .filter_map(|c| {
+            if seen.insert(c.username.clone()) {
+                Some(c.username.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn broadcast_channel_viewers(state: &AppState, group_id: &str, channel_id: &str) {
-    let count = channel_viewer_count(state, group_id, channel_id);
+    let viewers = channel_viewers(state, group_id, channel_id);
     broadcast(
         state,
         &ServerEvent::ChannelViewers {
             group_id: group_id.to_string(),
             channel_id: channel_id.to_string(),
-            count,
+            count: viewers.len(),
+            viewers,
         },
     );
 }
