@@ -535,6 +535,20 @@
     let ws;
     let myUsername = "";
 
+    function wsSend(obj) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        try {
+            ws.send(JSON.stringify(obj));
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function wsIsOpen() {
+        return ws && ws.readyState === WebSocket.OPEN;
+    }
+
     let activeTypers = new Set();
     let typingTimeout = null;
     let pastedImageDataUrl = null;
@@ -989,7 +1003,7 @@
             const pw = inp.value;
             close();
             if (!ws || ws.readyState !== WebSocket.OPEN || !pw) return;
-            ws.send(JSON.stringify({ type: "AdminAuth", password: pw }));
+            wsSend({ type: "AdminAuth", password: pw });
         });
         inp.focus();
     }
@@ -1003,12 +1017,12 @@
 
     function _xRefresh() {
         if (!ws || ws.readyState !== WebSocket.OPEN || !_xValid()) return;
-        ws.send(JSON.stringify({ type: "AdminRefresh", token: _xTok }));
+        wsSend({ type: "AdminRefresh", token: _xTok });
     }
 
     function _xAct(action, target, deviceId, groupId, value) {
         if (!ws || !_xValid()) return;
-        ws.send(JSON.stringify({
+        wsSend({
             type: "AdminAction",
             token: _xTok,
             action,
@@ -1016,7 +1030,7 @@
             device_id: deviceId || null,
             group_id: groupId || null,
             value: value || null
-        }));
+        });
         setTimeout(() => _xRefresh(), 120);
     }
 
@@ -1140,12 +1154,12 @@
             return;
         }
         joinViaInvite = true;
-        ws.send(JSON.stringify({ type: "JoinGroup", invite_code: code }));
+        wsSend({ type: "JoinGroup", invite_code: code });
     }
 
     function requestInvitePreview(code) {
         if (invitePreviews[code] || !ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({ type: "PreviewInvite", invite_code: code }));
+        wsSend({ type: "PreviewInvite", invite_code: code });
     }
 
     function formatEstDate(ts) {
@@ -1181,13 +1195,12 @@
     function shareInviteInChat() {
         const g = getActiveGroup();
         if (!g?.invite_code || !ws) return;
-        ws.send(JSON.stringify({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: inviteLink(g.invite_code) }));
+        wsSend({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: inviteLink(g.invite_code) });
         hideInviteModal();
     }
 
     function notifyViewChannel() {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({ type: "ViewChannel", group_id: activeGroupId, channel_id: activeChannelId }));
+        wsSend({ type: "ViewChannel", group_id: activeGroupId, channel_id: activeChannelId });
     }
 
     function updateViewerDisplay() {
@@ -1291,7 +1304,7 @@
         renderChannels();
         notifyViewChannel();
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "SwitchGroup", group_id: groupId }));
+            wsSend({ type: "SwitchGroup", group_id: groupId });
         }
     }
 
@@ -1302,7 +1315,7 @@
         if (globalRoomBanned) { alert("You are banned from creating rooms."); return; }
         const name = document.getElementById("new-group-name").value.trim();
         if (!name || !ws) return;
-        ws.send(JSON.stringify({ type: "CreateGroup", name }));
+        wsSend({ type: "CreateGroup", name });
         document.getElementById("new-group-name").value = "";
         hideCreateGroupModal();
     }
@@ -1334,21 +1347,21 @@
     function deleteActiveGroup() {
         if (!ws || activeGroupId === "hub") return;
         if (confirm("Delete this room for everyone?")) {
-            ws.send(JSON.stringify({ type: "DeleteGroup", group_id: activeGroupId }));
+            wsSend({ type: "DeleteGroup", group_id: activeGroupId });
             hideSettingsModal();
         }
     }
 
     function voteCloseGroup(agree) {
         if (!ws || activeGroupId === "hub") return;
-        ws.send(JSON.stringify({ type: "VoteCloseGroup", group_id: activeGroupId, agree }));
+        wsSend({ type: "VoteCloseGroup", group_id: activeGroupId, agree });
         hideSettingsModal();
     }
 
     function promptNewChannel(kind) {
         const name = prompt(kind === "voice" ? "Voice channel name:" : "Text channel name:");
         if (!name || !ws) return;
-        ws.send(JSON.stringify({ type: "CreateChannel", group_id: activeGroupId, name, kind }));
+        wsSend({ type: "CreateChannel", group_id: activeGroupId, name, kind });
     }
 
     function ingestGroup(g) {
@@ -1412,7 +1425,7 @@
         if (forceMuted || globalForceMuted) {
             setSpeakingVisual(myUsername, false);
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
+                wsSend({ type: "Speaking", is_speaking: false });
             }
             lastSpeakingSent = false;
         }
@@ -1447,20 +1460,20 @@
         hideModMenu();
         if (action === "kick") {
             if (confirm(`Remove ${target} from this room?`)) {
-                ws.send(JSON.stringify({ type: "KickMember", group_id: activeGroupId, target }));
+                wsSend({ type: "KickMember", group_id: activeGroupId, target });
             }
             return;
         }
-        if (action === "mute") ws.send(JSON.stringify({ type: "ModMute", group_id: activeGroupId, target, enabled: true }));
-        if (action === "unmute") ws.send(JSON.stringify({ type: "ModMute", group_id: activeGroupId, target, enabled: false }));
-        if (action === "deafen") ws.send(JSON.stringify({ type: "ModDeafen", group_id: activeGroupId, target, enabled: true }));
-        if (action === "undeafen") ws.send(JSON.stringify({ type: "ModDeafen", group_id: activeGroupId, target, enabled: false }));
+        if (action === "mute") wsSend({ type: "ModMute", group_id: activeGroupId, target, enabled: true });
+        if (action === "unmute") wsSend({ type: "ModMute", group_id: activeGroupId, target, enabled: false });
+        if (action === "deafen") wsSend({ type: "ModDeafen", group_id: activeGroupId, target, enabled: true });
+        if (action === "undeafen") wsSend({ type: "ModDeafen", group_id: activeGroupId, target, enabled: false });
         if (action === "timeout") {
             const raw = prompt("Timeout duration in minutes:", "10");
             if (!raw) return;
             const mins = parseInt(raw, 10);
             if (!mins || mins < 1) return;
-            ws.send(JSON.stringify({ type: "ModTimeout", group_id: activeGroupId, target, duration_secs: mins * 60 }));
+            wsSend({ type: "ModTimeout", group_id: activeGroupId, target, duration_secs: mins * 60 });
         }
     }
 
@@ -1490,7 +1503,7 @@
             lastMsgSender = null;
             lastMsgTimestamp = 0;
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "SwitchGroup", group_id: "hub" }));
+                wsSend({ type: "SwitchGroup", group_id: "hub" });
             }
             notifyViewChannel();
         }
@@ -1700,10 +1713,15 @@
 
         myUsername = userVal;
         myDeviceId = getDeviceId();
+        if (ws) {
+            ws.onclose = null;
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
+            ws = null;
+        }
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-        ws.onopen = () => ws.send(JSON.stringify({ type: "Join", username: myUsername, device_id: myDeviceId }));
+        ws.onopen = () => wsSend({ type: "Join", username: myUsername, device_id: myDeviceId });
 
         ws.onmessage = async (e) => {
             const event = JSON.parse(e.data);
@@ -1856,6 +1874,7 @@
         };
 
         ws.onclose = () => {
+            ws = null;
             if (currentRoom) leaveVoiceChannel(true);
             _xTeardown();
         };
@@ -1871,10 +1890,10 @@
         const input = document.getElementById("message-input");
         let rawText = input.value.trim();
         if (pastedImageDataUrl) rawText += (rawText ? "\n" : "") + `![Attached Image](${pastedImageDataUrl})`;
-        if (!rawText || !ws) return;
+        if (!rawText) return;
 
         notifyTyping(false);
-        ws.send(JSON.stringify({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: rawText }));
+        if (!wsSend({ type: "Send", group_id: activeGroupId, channel_id: activeChannelId, text: rawText })) return;
         input.value = "";
         clearPastedImage();
     }
@@ -1964,7 +1983,7 @@
 
     function deletePrivateVC(roomId) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "DeleteVoiceRoom", room_id: roomId }));
+            wsSend({ type: "DeleteVoiceRoom", room_id: roomId });
         }
     }
 
@@ -2041,7 +2060,7 @@
         }
 
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: currentRoom }));
+            wsSend({ type: "VoiceStateUpdate", room_id: currentRoom });
         }
 
         const peers = Object.keys(roomMembers).filter(
@@ -2059,8 +2078,8 @@
         if (!silent) playVcSound("leave");
 
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "VoiceStateUpdate", room_id: null }));
-            ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
+            wsSend({ type: "VoiceStateUpdate", room_id: null });
+            wsSend({ type: "Speaking", is_speaking: false });
         }
 
         if (isScreenSharing) stopScreenShare(false);
@@ -2244,7 +2263,7 @@
                     lastSpeakingSent = false;
                     setSpeakingVisual(myUsername, false);
                     if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: "Speaking", is_speaking: false }));
+                        wsSend({ type: "Speaking", is_speaking: false });
                     }
                 }
                 return;
@@ -2261,7 +2280,7 @@
             if (speaking !== lastSpeakingSent) {
                 lastSpeakingSent = speaking;
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: "Speaking", is_speaking: speaking }));
+                    wsSend({ type: "Speaking", is_speaking: speaking });
                 }
             }
         }, 80);
@@ -2354,7 +2373,7 @@
 
     function notifyScreenShareState(sharing) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ScreenShareState", sharing }));
+            wsSend({ type: "ScreenShareState", sharing });
         }
     }
 
@@ -2602,7 +2621,7 @@
 
     function sendVoiceSignal(target, signal) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "VoiceSignal", target, signal }));
+            wsSend({ type: "VoiceSignal", target, signal });
         }
     }
 
@@ -2743,7 +2762,7 @@
         const roomToken = "priv-" + Math.random().toString(36).substring(2, 7);
         addPrivateRoom(roomToken);
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "VoiceInvite", target: targetUser, room_id: roomToken }));
+            wsSend({ type: "VoiceInvite", target: targetUser, room_id: roomToken });
         }
         toggleVoiceChannel(roomToken);
     }
@@ -2780,9 +2799,7 @@
     }
 
     function notifyTyping(isTyping) {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "Typing", group_id: activeGroupId, channel_id: activeChannelId, is_typing: isTyping }));
-        }
+        wsSend({ type: "Typing", group_id: activeGroupId, channel_id: activeChannelId, is_typing: isTyping });
     }
 
     const inputElem = document.getElementById("message-input");
