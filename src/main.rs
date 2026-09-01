@@ -1,5 +1,13 @@
-use axum::{ extract::ws::{Message, WebSocket, WebSocketUpgrade}, response::{Html, IntoResponse}, routing::get, Router, };
-use aes_gcm::{ aead::{Aead, KeyInit, OsRng},Aes256Gcm, Key, Nonce, };
+use axum::{
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use aes_gcm::aead::rand_core::RngCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -12,14 +20,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
-const DEFAULT_PASSPHRASE: &str = "89y7gy789BSUY*BCV&*(OY^SWBER(cv78bghijkbdso98uy7vbw3uy74vbf08))";
-const GLOBAL_SALT: &[u8] = b"087fbh34fbh0f87sgbef0789v384fv03874cfv8";
+const DEFAULT_PASSPHRASE: &str = "RUSTCORD_SERVER_GLOBAL_SECRET_KEY";
+const GLOBAL_SALT: &[u8] = b"rust_cord_secure_salt_2026";
 const HUB_ID: &str = "hub";
 const MAX_MSGS_PER_CHANNEL: usize = 200;
 const BROADCAST_CAP: usize = 8192;
 const ROOM_TTL_SECS: u64 = 86400;
 const ADMIN_SESSION_SECS: u64 = 600;
-const DEFAULT_ADMIN_PASSWORD: &str = "12345";
+const DEFAULT_ADMIN_PASSWORD: &str = "1234";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct StoredMessage {

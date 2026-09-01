@@ -1585,13 +1585,13 @@
 
     async function setLocalOffer(pc) {
         const offer = await pc.createOffer();
-        await pc.setLocalDescription(mungedDesc(offer));
+        await pc.setLocalDescription(new RTCSessionDescription(mungedDesc(offer)));
         return pc.localDescription;
     }
 
     async function setLocalAnswer(pc) {
         const answer = await pc.createAnswer();
-        await pc.setLocalDescription(mungedDesc(answer));
+        await pc.setLocalDescription(new RTCSessionDescription(mungedDesc(answer)));
         return pc.localDescription;
     }
 
@@ -2475,8 +2475,9 @@
         }
     }
 
-    async function renegotiatePeer(targetUser, pc) {
-        if (!pc || pc._suppressNegotiation || pc._negotiating) return;
+    async function renegotiatePeer(targetUser, pc, { force = false } = {}) {
+        if (!pc || pc._negotiating) return;
+        if (!force && pc._suppressNegotiation) return;
         if (pc.signalingState !== "stable") return;
         pc._negotiating = true;
         try {
@@ -2521,7 +2522,7 @@
 
         pc.onnegotiationneeded = async () => {
             if (pc._suppressNegotiation || pc._negotiating) return;
-            await renegotiatePeer(targetUser, pc);
+            if (!pc.polite) await renegotiatePeer(targetUser, pc);
         };
 
         pc.onconnectionstatechange = () => {
@@ -2545,11 +2546,11 @@
         })();
         await pc._ready;
 
-        if (!incoming && !pc.polite && pc.signalingState === "stable") {
-            await renegotiatePeer(targetUser, pc);
-        }
+        pc._suppressNegotiation = false;
 
-        if (!incoming) pc._suppressNegotiation = false;
+        if (!incoming && !pc.polite && pc.signalingState === "stable") {
+            await renegotiatePeer(targetUser, pc, { force: true });
+        }
 
         return pc;
     }
@@ -2674,7 +2675,7 @@
 
             for (const [target, pc] of Object.entries(peerConnections)) {
                 await addScreenShareToPeer(target, pc);
-                await renegotiatePeer(target, pc);
+                await renegotiatePeer(target, pc, { force: true });
                 syncPeerMedia(target, pc);
             }
             setTimeout(refreshAllScreenEncodings, 300);
@@ -2700,7 +2701,7 @@
 
         for (const [target, pc] of Object.entries(peerConnections)) {
             await removeScreenShareFromPeer(target, pc);
-            await renegotiatePeer(target, pc);
+            await renegotiatePeer(target, pc, { force: true });
         }
         screenShareSenders = {};
 
