@@ -975,19 +975,22 @@
         _xPrompt.style.display = "flex";
         _xPrompt.innerHTML = `<div class="modal-box" style="max-width:360px"><h3>Verification</h3>
             <p>Enter passcode to continue.</p>
-            <input type="password" autocomplete="off" data-x="pw" placeholder="Passcode" />
-            <div class="modal-actions"><button class="modal-btn-secondary" data-x="cn">Cancel</button><button class="modal-btn-primary" data-x="ok">Continue</button></div></div>`;
+            <form data-x="pwform">
+                <input type="password" autocomplete="off" data-x="pw" placeholder="Passcode" />
+                <div class="modal-actions"><button type="button" class="modal-btn-secondary" data-x="cn">Cancel</button><button type="submit" class="modal-btn-primary" data-x="ok">Continue</button></div>
+            </form></div>`;
         document.body.appendChild(_xPrompt);
         const inp = _xPrompt.querySelector('[data-x="pw"]');
+        const form = _xPrompt.querySelector('[data-x="pwform"]');
         const close = () => { _xPrompt.remove(); _xPrompt = null; };
         _xPrompt.querySelector('[data-x="cn"]').addEventListener("click", close);
-        _xPrompt.querySelector('[data-x="ok"]').addEventListener("click", () => {
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
             const pw = inp.value;
             close();
             if (!ws || ws.readyState !== WebSocket.OPEN || !pw) return;
             ws.send(JSON.stringify({ type: "AdminAuth", password: pw }));
         });
-        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") _xPrompt.querySelector('[data-x="ok"]').click(); });
         inp.focus();
     }
 
@@ -2314,11 +2317,10 @@
             removeVideoTile(userId);
             return;
         }
-        if (!isLocal && !screenSharers.has(userId)) return;
 
         const showTile = () => {
             if (track.readyState === "ended") { removeVideoTile(userId); return; }
-            if (!isLocal && !screenSharers.has(userId)) return;
+            if (!isLocal) screenSharers.add(userId);
             ensureVideoTile(userId, isLocal);
             const videoEl = document.getElementById(`video-${userId}`);
             videoEl.srcObject = new MediaStream([track]);
@@ -2345,7 +2347,7 @@
             if (track.kind === "audio") attachAudioTrack(userId, track);
             else if (track.kind === "video") {
                 if (track.readyState === "ended") removeVideoTile(userId);
-                else if (screenSharers.has(userId)) attachVideoTrack(userId, track, false);
+                else attachVideoTrack(userId, track, false);
             }
         });
     }
@@ -2455,7 +2457,9 @@
     }
 
     async function renegotiatePeer(targetUser, pc) {
-        if (!pc || pc._suppressNegotiation || pc.signalingState !== "stable") return;
+        if (!pc || pc._suppressNegotiation || pc._negotiating) return;
+        if (pc.signalingState !== "stable") return;
+        pc._negotiating = true;
         try {
             pc.makingOffer = true;
             await setLocalOffer(pc);
@@ -2469,6 +2473,7 @@
             console.error("Renegotiate error:", err);
         } finally {
             pc.makingOffer = false;
+            pc._negotiating = false;
         }
     }
 
@@ -2481,7 +2486,8 @@
         const pc = new RTCPeerConnection(rtcConfig);
         pc.makingOffer = false;
         pc.polite = isPolite(targetUser);
-        pc._suppressNegotiation = incoming;
+        pc._suppressNegotiation = true;
+        pc._negotiating = false;
         peerConnections[targetUser] = pc;
         iceQueues[targetUser] = [];
 
@@ -2495,21 +2501,8 @@
         };
 
         pc.onnegotiationneeded = async () => {
-            if (pc._suppressNegotiation) return;
-            try {
-                pc.makingOffer = true;
-                await setLocalOffer(pc);
-                sendVoiceSignal(targetUser, { sdp: pc.localDescription });
-                if (screenShareSenders[targetUser]) await applyScreenShareEncoding(screenShareSenders[targetUser]);
-                else {
-                    const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
-                    if (audioSender) await applyAudioEncoding(audioSender);
-                }
-            } catch (err) {
-                console.error("Negotiation error:", err);
-            } finally {
-                pc.makingOffer = false;
-            }
+            if (pc._suppressNegotiation || pc._negotiating) return;
+            await renegotiatePeer(targetUser, pc);
         };
 
         pc.onconnectionstatechange = () => {
@@ -2537,8 +2530,7 @@
             await renegotiatePeer(targetUser, pc);
         }
 
-        const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
-        if (audioSender) await applyAudioEncoding(audioSender);
+        if (!incoming) pc._suppressNegotiation = false;
 
         return pc;
     }
@@ -2550,11 +2542,17 @@
 
         if (signal.sdp) {
             const description = signal.sdp;
-            const offerCollision = description.type === "offer" && (pc.makingOffer || pc.signalingState !== "stable");
-            if (!pc.polite && offerCollision) return;
+            const isOffer = description.type === "offer";
+            const isAnswer = description.type === "answer";
 
+            if (isAnswer && pc.signalingState !== "have-local-offer") return;
+
+            const offerCollision = isOffer && (pc.makingOffer || pc.signalingState !== "stable");
+            if (offerCollision && !pc.polite) return;
+
+            pc._suppressNegotiation = true;
             try {
-                if (offerCollision) {
+                if (offerCollision && pc.polite) {
                     await Promise.all([
                         pc.setLocalDescription({ type: "rollback" }),
                         pc.setRemoteDescription(new RTCSessionDescription(description))
@@ -2565,9 +2563,9 @@
             } catch (err) {
                 console.error("setRemoteDescription failed:", err);
                 return;
+            } finally {
+                pc._suppressNegotiation = false;
             }
-
-            pc._suppressNegotiation = false;
 
             if (iceQueues[fromUser]) {
                 while (iceQueues[fromUser].length > 0) {
@@ -2576,9 +2574,14 @@
                 }
             }
 
-            if (description.type === "offer") {
-                await setLocalAnswer(pc);
-                sendVoiceSignal(fromUser, { sdp: pc.localDescription });
+            if (isOffer && pc.signalingState === "have-remote-offer") {
+                try {
+                    await setLocalAnswer(pc);
+                    sendVoiceSignal(fromUser, { sdp: pc.localDescription });
+                } catch (err) {
+                    console.error("setLocalAnswer failed:", err);
+                    return;
+                }
             }
 
             syncPeerMedia(fromUser, pc);
