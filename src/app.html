@@ -1567,31 +1567,15 @@
         dtx: false
     };
 
-    function mungeSdp(sdp) {
-        if (!sdp) return sdp;
-        let s = sdp.replace(/usedtx=1/g, "usedtx=0");
-        s = s.replace(/a=fmtp:(\d+) ([^\r\n]+)/g, (line, pt, params) => {
-            if (!/minptime|useinbandfec|stereo/.test(params)) return line;
-            if (params.includes("usedtx=0")) return line;
-            return `a=fmtp:${pt} ${params};usedtx=0`;
-        });
-        return s;
-    }
-
-    function mungedDesc(desc) {
-        if (!desc) return desc;
-        return { type: desc.type, sdp: mungeSdp(desc.sdp) };
-    }
-
     async function setLocalOffer(pc) {
         const offer = await pc.createOffer();
-        await pc.setLocalDescription(mungedDesc(offer));
+        await pc.setLocalDescription(offer);
         return pc.localDescription;
     }
 
     async function setLocalAnswer(pc) {
         const answer = await pc.createAnswer();
-        await pc.setLocalDescription(mungedDesc(answer));
+        await pc.setLocalDescription(answer);
         return pc.localDescription;
     }
 
@@ -2042,8 +2026,8 @@
             localStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: { ideal: true },
-                    noiseSuppression: { ideal: false },
-                    autoGainControl: { ideal: false },
+                    noiseSuppression: { ideal: true },
+                    autoGainControl: { ideal: true },
                     sampleRate: { ideal: 48000 },
                     channelCount: { ideal: 1 }
                 },
@@ -2476,8 +2460,11 @@
     }
 
     async function renegotiatePeer(targetUser, pc) {
-        if (!pc || pc._suppressNegotiation || pc._negotiating) return;
-        if (pc.signalingState !== "stable") return;
+        if (!pc) return;
+        if (pc._suppressNegotiation || pc._negotiating || pc.signalingState !== "stable") {
+            pc._negotiationPending = true;
+            return;
+        }
         pc._negotiating = true;
         try {
             pc.makingOffer = true;
@@ -2493,6 +2480,10 @@
         } finally {
             pc.makingOffer = false;
             pc._negotiating = false;
+            if (pc._negotiationPending && pc.signalingState === "stable") {
+                pc._negotiationPending = false;
+                queueMicrotask(() => renegotiatePeer(targetUser, pc));
+            }
         }
     }
 
@@ -2507,6 +2498,7 @@
         pc.polite = isPolite(targetUser);
         pc._suppressNegotiation = true;
         pc._negotiating = false;
+        pc._negotiationPending = false;
         peerConnections[targetUser] = pc;
         iceQueues[targetUser] = [];
 
@@ -2520,7 +2512,10 @@
         };
 
         pc.onnegotiationneeded = async () => {
-            if (pc._suppressNegotiation || pc._negotiating) return;
+            if (pc._suppressNegotiation || pc._negotiating) {
+                pc._negotiationPending = true;
+                return;
+            }
             await renegotiatePeer(targetUser, pc);
         };
 
@@ -2549,7 +2544,7 @@
             await renegotiatePeer(targetUser, pc);
         }
 
-        if (!incoming) pc._suppressNegotiation = false;
+        pc._suppressNegotiation = false;
 
         return pc;
     }
